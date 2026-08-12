@@ -32,7 +32,7 @@ maintenant et dans dix ans.
 **Option 2 — avec git**
 
 ```bash
-git clone https://github.com/VOTRE-COMPTE/2048.git
+git clone https://github.com/matvanghe2-boop/2048.git
 ```
 
 Puis ouvrez `index.html`.
