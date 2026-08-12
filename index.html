@@ -1,0 +1,3265 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>2048</title>
+<style>
+/* ══════════════════════════════════════════════════════════
+   VARIABLES
+   Couleurs pilotees par le panneau Couleurs, durees par le
+   panneau Animations, dimensions recalculees selon la place.
+   ══════════════════════════════════════════════════════════ */
+:root {
+  --taille-case: 100px;
+  --ecart: 12px;
+  --cote-plateau: 460px;
+
+  --duree-glissement: 150ms;
+  --courbe-glissement: cubic-bezier(0.25, 0.6, 0.35, 1);
+  --duree-apparition: 180ms;
+  --duree-fusion: 190ms;
+
+  --fond-page: #faf8ef;
+  --texte: #776e65;
+  --fond-plateau: #bbada0;
+  --case-vide: #cdc1b4;
+  --bouton: #8f7a66;
+  --bouton-survol: #9f8b77;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--fond-page);
+  color: var(--texte);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overscroll-behavior: none;
+  transition: background 200ms;
+}
+
+/* le header universel Orbit occupe toute la largeur, le jeu reste centre */
+orbit-header { width: 100%; }
+
+.conteneur { width: 100%; max-width: 480px; padding: 16px 10px 24px; }
+
+/* visible uniquement pour les lecteurs d'ecran */
+.lecteur-seul {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ─── En-tete ───────────────────────────────────────────── */
+.entete {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 8px; margin-bottom: 12px;
+}
+
+h1 { font-size: clamp(32px, 10vw, 52px); font-weight: 800; line-height: 1; letter-spacing: -2px; }
+
+.groupe-scores { display: flex; gap: 6px; }
+
+.boite-score {
+  position: relative; background: var(--fond-plateau); color: #fff;
+  border-radius: 6px; padding: 6px 12px; text-align: center;
+  min-width: 76px; transition: background 200ms;
+}
+
+.boite-score .libelle {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1px; opacity: 0.8;
+}
+
+.boite-score .valeur { font-size: 20px; font-weight: 700; line-height: 1.2; }
+
+.gain-score {
+  position: absolute; left: 0; right: 0; top: 8px;
+  font-size: 18px; font-weight: 700; color: var(--texte);
+  animation: monter 650ms ease-in forwards; pointer-events: none;
+}
+
+@keyframes monter {
+  0%   { opacity: 0.9; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-44px); }
+}
+
+/* ─── Barre de commandes ────────────────────────────────── */
+.barre { margin-bottom: 12px; }
+
+.consigne { font-size: 12.5px; line-height: 1.45; margin-bottom: 8px; }
+
+.consigne kbd {
+  background: rgba(0,0,0,0.08); border-radius: 3px; padding: 1px 5px;
+  font-family: inherit; font-weight: 700; font-size: 12px;
+}
+
+.groupe-boutons { display: flex; gap: 6px; flex-wrap: wrap; }
+
+button {
+  font-family: inherit; font-size: 13.5px; font-weight: 700;
+  color: #f9f6f2; background: var(--bouton);
+  border: none; border-radius: 6px; padding: 9px 13px;
+  cursor: pointer; transition: background 120ms, opacity 120ms;
+}
+
+button:hover:not(:disabled) { background: var(--bouton-survol); }
+button:disabled { opacity: 0.35; cursor: default; }
+button.actif { outline: 3px solid var(--texte); outline-offset: 1px; }
+
+/* mise en evidence claire au clavier, sans gener a la souris */
+:focus-visible { outline: 3px solid var(--texte); outline-offset: 3px; }
+
+/* ─── Plateau ───────────────────────────────────────────── */
+.plateau {
+  position: relative;
+  background: var(--fond-plateau);
+  border-radius: 8px;
+  width: var(--cote-plateau); height: var(--cote-plateau);
+  margin: 0 auto; touch-action: none;
+  transition: background 200ms;
+}
+
+.case-vide {
+  position: absolute;
+  width: var(--taille-case); height: var(--taille-case);
+  background: var(--case-vide); border-radius: 4px;
+  transition: background 200ms;
+}
+
+.tuile {
+  position: absolute;
+  width: var(--taille-case); height: var(--taille-case);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800;
+  /* LE GLISSEMENT */
+  transition: transform var(--duree-glissement) var(--courbe-glissement);
+  will-change: transform;
+  z-index: 2;
+}
+
+/* pendant un redimensionnement, on replace sans animer */
+.plateau.sans-transition .tuile,
+.plateau.sans-transition .case-vide { transition: none !important; }
+
+/* Les animations ci-dessous utilisent `scale`, `rotate`, `translate` et
+   `filter` — jamais `transform`. Une animation prend le controle exclusif
+   de la propriete qu'elle anime : si elle touchait `transform`, elle
+   empecherait le glissement de s'animer. */
+.tuile[class*="app-"] { z-index: 3; }
+
+.tuile.app-zoom     { animation: appZoom     var(--duree-apparition) ease-out; }
+.tuile.app-fondu    { animation: appFondu    var(--duree-apparition) ease-out; }
+.tuile.app-rotation { animation: appRotation var(--duree-apparition) ease-out; }
+.tuile.app-chute    { animation: appChute    var(--duree-apparition) cubic-bezier(0.34,1.4,0.64,1); }
+.tuile.app-eclosion { animation: appEclosion var(--duree-apparition) cubic-bezier(0.34,1.56,0.64,1); }
+
+@keyframes appZoom     { 0% { scale: 0; } 60% { scale: 1.1; } 100% { scale: 1; } }
+@keyframes appFondu    { 0% { opacity: 0; scale: 0.85; } 100% { opacity: 1; scale: 1; } }
+@keyframes appRotation { 0% { scale: 0; rotate: -200deg; } 100% { scale: 1; rotate: 0deg; } }
+@keyframes appChute    { 0% { translate: 0 -60%; opacity: 0; } 100% { translate: 0 0; opacity: 1; } }
+@keyframes appEclosion { 0% { scale: 0; } 55% { scale: 1.35; } 75% { scale: 0.92; } 100% { scale: 1; } }
+
+.tuile[class*="fus-"] { z-index: 4; }
+
+.tuile.fus-pulsation { animation: fusPulsation var(--duree-fusion) ease-out; }
+.tuile.fus-eclat     { animation: fusEclat     var(--duree-fusion) ease-out; }
+.tuile.fus-secousse  { animation: fusSecousse  var(--duree-fusion) ease-in-out; }
+.tuile.fus-rotation  { animation: fusRotation  var(--duree-fusion) ease-out; }
+.tuile.fus-onde      { animation: fusOnde      var(--duree-fusion) ease-out; }
+
+@keyframes fusPulsation { 0% { scale: 1; } 45% { scale: 1.22; } 100% { scale: 1; } }
+
+@keyframes fusEclat {
+  0%   { scale: 1;    filter: brightness(1); }
+  35%  { scale: 1.15; filter: brightness(2.1); }
+  100% { scale: 1;    filter: brightness(1); }
+}
+
+@keyframes fusSecousse {
+  0%, 100% { translate: 0 0; }
+  20% { translate: -9% 0; } 50% { translate: 8% 0; } 80% { translate: -4% 0; }
+}
+
+@keyframes fusRotation {
+  0% { rotate: 0deg; scale: 1; } 50% { rotate: 12deg; scale: 1.15; } 100% { rotate: 0deg; scale: 1; }
+}
+
+@keyframes fusOnde {
+  0%   { scale: 1;    box-shadow: 0 0 0 0 currentColor; }
+  40%  { scale: 1.12; box-shadow: 0 0 0 10px rgba(255,255,255,0); }
+  100% { scale: 1;    box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+}
+
+/*
+  Tuile absorbee par une fusion : elle glisse jusqu'a sa cible puis
+  s'efface sur les 70 dernieres millisecondes, au lieu de disparaitre
+  d'un coup. Le retard est calcule pour finir avec le glissement.
+*/
+.tuile.absorbee {
+  z-index: 1;
+  opacity: 0;
+  transition: transform var(--duree-glissement) var(--courbe-glissement),
+              opacity 70ms linear max(0ms, calc(var(--duree-glissement) - 70ms));
+}
+
+/* ─── Surimpressions ────────────────────────────────────── */
+.surimpression {
+  position: absolute; inset: 0; border-radius: 8px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; z-index: 20; text-align: center; padding: 12px;
+  animation: fondu 350ms ease-in; backdrop-filter: blur(2px);
+}
+
+@keyframes fondu { from { opacity: 0; } to { opacity: 1; } }
+
+.surimpression.perdu { background: rgba(238, 228, 218, 0.78); color: #776e65; }
+.surimpression.gagne { background: rgba(237, 194, 46, 0.62); color: #201c10; }
+.surimpression .titre  { font-size: clamp(26px, 8vw, 40px); font-weight: 800; }
+.surimpression .detail { font-size: 15px; font-weight: 600; line-height: 1.5; }
+
+/* ─── Panneaux ──────────────────────────────────────────── */
+.panneau {
+  margin-top: 14px; padding: 14px;
+  background: rgba(0, 0, 0, 0.05); border-radius: 8px;
+}
+
+.panneau h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+  margin-bottom: 8px; opacity: 0.7;
+}
+
+.panneau h2:not(:first-child) { margin-top: 14px; }
+
+.rangee { display: flex; flex-wrap: wrap; gap: 6px; }
+.rangee button { padding: 7px 12px; font-size: 12.5px; }
+
+.grille-couleurs { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
+
+.champ-couleur { text-align: center; font-size: 11px; font-weight: 700; }
+.champ-couleur label { display: block; margin-bottom: 3px; opacity: 0.75; }
+
+.champ-couleur input[type="color"] {
+  width: 100%; height: 30px; border: none; border-radius: 4px;
+  background: none; cursor: pointer; padding: 0;
+}
+
+.champ-couleur input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+.champ-couleur input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
+
+.ligne-curseur { display: flex; align-items: center; gap: 10px; }
+.ligne-curseur input[type="range"] { flex: 1; accent-color: var(--bouton); cursor: pointer; }
+.ligne-curseur span { font-size: 13px; font-weight: 700; min-width: 42px; text-align: right; }
+
+.actions-panneau { margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
+
+.note { font-size: 12px; line-height: 1.5; opacity: 0.75; margin-top: 6px; }
+
+.cache { display: none !important; }
+
+/* ─── Statistiques ──────────────────────────────────────── */
+.stats { margin: 14px auto 0; display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
+.stats div { text-align: center; }
+.stats .libelle { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; opacity: 0.6; }
+.stats .valeur { font-size: 17px; font-weight: 700; }
+
+/* ─── Panneau Parties ───────────────────────────────────── */
+.resume {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 10px; margin-bottom: 6px;
+}
+
+.resume div { text-align: center; }
+.resume .libelle { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; opacity: 0.6; }
+.resume .valeur { font-size: 19px; font-weight: 700; }
+
+.courbe { width: 100%; height: auto; overflow: visible; }
+.courbe polyline { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+.courbe .zone { fill: currentColor; opacity: 0.12; stroke: none; }
+.courbe .repere { stroke: currentColor; opacity: 0.25; stroke-width: 1; stroke-dasharray: 3 3; }
+.courbe text { font-size: 10px; fill: currentColor; opacity: 0.65; }
+
+.barres { display: flex; flex-direction: column; gap: 4px; }
+.barre-ligne { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; }
+.barre-ligne .etiquette { min-width: 46px; text-align: right; opacity: 0.75; }
+.barre-ligne .piste { flex: 1; height: 14px; background: rgba(0,0,0,0.08); border-radius: 3px; overflow: hidden; }
+.barre-ligne .remplissage { height: 100%; background: var(--bouton); border-radius: 3px; }
+.barre-ligne .compte { min-width: 22px; opacity: 0.75; }
+
+/* ─── Tableau des records d'objectif ────────────────────── */
+.tableau-records { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tableau-records th, .tableau-records td {
+  padding: 5px 8px; text-align: center; border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+.tableau-records th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.65; }
+.tableau-records td { font-weight: 700; }
+.tableau-records td.vide { opacity: 0.3; font-weight: 400; }
+
+.sous-titre {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; opacity: 0.6; margin: 10px 0 4px;
+}
+
+.pastille {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 20px; vertical-align: middle;
+  background: var(--bouton); color: #f9f6f2; margin-left: 5px;
+}
+
+/* ─── Resultats de tests ────────────────────────────────── */
+.resultat-tests {
+  margin-top: 10px; padding: 10px; border-radius: 6px;
+  background: rgba(0,0,0,0.07);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11.5px; line-height: 1.6; white-space: pre-wrap;
+  max-height: 280px; overflow-y: auto;
+}
+
+.resultat-tests .ok    { color: #2e7d32; font-weight: 700; }
+.resultat-tests .echec { color: #c62828; font-weight: 700; }
+
+/* ─── Bot ───────────────────────────────────────────────── */
+.info-bot {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px; line-height: 1.7;
+  padding: 8px 10px; border-radius: 6px;
+  background: rgba(0,0,0,0.07);
+}
+
+.ligne-poids { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+.ligne-poids label { font-size: 12px; font-weight: 700; min-width: 96px; }
+.ligne-poids input { flex: 1; accent-color: var(--bouton); cursor: pointer; }
+.ligne-poids output { font-size: 12px; font-weight: 700; min-width: 38px; text-align: right; }
+
+/* le plateau signale discretement que le bot a la main */
+.plateau.pilote-par-bot { box-shadow: 0 0 0 3px var(--bouton); }
+</style>
+</head>
+<body>
+<!-- Header universel du reseau Orbit. Le script est servi depuis ce dossier
+     (et non depuis le hub) pour que le jeu reste 100% jouable hors ligne. -->
+<orbit-header app-name="2048" theme="gaming" compact></orbit-header>
+<script src="./orbit-header.js" defer></script>
+
+<div class="conteneur" id="conteneur">
+
+  <div class="entete">
+    <h1>2048</h1>
+    <div class="groupe-scores">
+      <div class="boite-score">
+        <div class="libelle" id="lib-score">Score</div>
+        <div class="valeur" id="score">0</div>
+      </div>
+      <div class="boite-score">
+        <div class="libelle" id="libelle-record">Record</div>
+        <div class="valeur" id="record">0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- annonces destinees aux lecteurs d'ecran -->
+  <div class="lecteur-seul" id="annonce" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <div class="barre">
+    <div class="consigne">
+      Deplacements aux <b>fleches</b> du clavier &middot;
+      <kbd>Ctrl</kbd>+<kbd>Z</kbd> pour annuler &middot; balayage sur mobile
+    </div>
+    <div class="groupe-boutons">
+      <button id="btn-jeu" aria-expanded="false" aria-controls="panneau-jeu">Jeu</button>
+      <button id="btn-couleurs" aria-expanded="false" aria-controls="panneau-couleurs">Couleurs</button>
+      <button id="btn-animations" aria-expanded="false" aria-controls="panneau-animations">Animations</button>
+      <button id="btn-parties" aria-expanded="false" aria-controls="panneau-parties">Parties</button>
+      <button id="btn-bot" aria-expanded="false" aria-controls="panneau-bot">Bot</button>
+      <button id="btn-annuler" disabled>Annuler</button>
+      <button id="btn-nouvelle">Nouvelle partie</button>
+    </div>
+  </div>
+
+  <div class="plateau" id="plateau" role="grid" tabindex="0"
+       aria-label="Grille de jeu 2048. Utilisez les fleches directionnelles pour deplacer les tuiles."></div>
+
+  <div class="stats">
+    <div><div class="libelle">Coups</div><div class="valeur" id="stat-coups">0</div></div>
+    <div><div class="libelle">Meilleure tuile</div><div class="valeur" id="stat-max">0</div></div>
+    <div><div class="libelle">Parties</div><div class="valeur" id="stat-parties">0</div></div>
+  </div>
+
+  <!-- ─── Panneau Jeu ─── -->
+  <div class="panneau cache" id="panneau-jeu">
+    <h2>Taille de la grille</h2>
+    <div class="rangee" id="liste-tailles"></div>
+
+    <h2>Mode de jeu</h2>
+    <div class="rangee" id="liste-modes"></div>
+
+    <div id="bloc-objectif">
+      <h2>Objectif a atteindre</h2>
+      <div class="rangee" id="liste-objectifs"></div>
+      <div class="note" id="note-objectif"></div>
+    </div>
+
+    <h2>Records d'objectif</h2>
+    <div id="zone-records"></div>
+
+    <h2>Verification</h2>
+    <div class="rangee">
+      <button id="btn-tests">Lancer les tests</button>
+    </div>
+    <div class="resultat-tests cache" id="resultat-tests"></div>
+
+    <div class="actions-panneau">
+      <button id="btn-fermer-jeu">Fermer</button>
+    </div>
+  </div>
+
+  <!-- ─── Panneau Couleurs ─── -->
+  <div class="panneau cache" id="panneau-couleurs">
+    <h2>Themes</h2>
+    <div class="rangee" id="liste-themes"></div>
+
+    <h2>Couleurs des tuiles</h2>
+    <div class="grille-couleurs" id="couleurs-tuiles"></div>
+
+    <h2>Plateau</h2>
+    <div class="grille-couleurs" id="couleurs-plateau"></div>
+
+    <div class="actions-panneau">
+      <button id="btn-reinitialiser-couleurs">Reinitialiser</button>
+      <button id="btn-fermer-couleurs">Fermer</button>
+    </div>
+  </div>
+
+  <!-- ─── Panneau Animations ─── -->
+  <div class="panneau cache" id="panneau-animations">
+    <h2>Glissement des tuiles</h2>
+    <div class="rangee" id="liste-glissements"></div>
+
+    <h2>Apparition d'une nouvelle tuile</h2>
+    <div class="rangee" id="liste-apparitions"></div>
+
+    <h2>Effet de fusion</h2>
+    <div class="rangee" id="liste-fusions"></div>
+
+    <h2>Vitesse generale</h2>
+    <div class="ligne-curseur">
+      <input type="range" id="curseur-vitesse" min="0.4" max="2" step="0.1" value="1"
+             aria-label="Vitesse des animations">
+      <span id="valeur-vitesse">x1.0</span>
+    </div>
+
+    <h2>Retour sonore et tactile</h2>
+    <div class="rangee" id="liste-retours"></div>
+    <div class="note" id="note-mouvement"></div>
+
+    <div class="actions-panneau">
+      <button id="btn-apercu-anim">Apercu</button>
+      <button id="btn-reinitialiser-anim">Reinitialiser</button>
+      <button id="btn-fermer-anim">Fermer</button>
+    </div>
+  </div>
+
+  <!-- ─── Panneau Parties ─── -->
+  <div class="panneau cache" id="panneau-parties">
+    <h2>Filtrer par taille de grille</h2>
+    <div class="rangee" id="liste-filtres"></div>
+
+    <h2>Filtrer par participation</h2>
+    <div class="rangee" id="liste-filtres-bot"></div>
+
+    <h2>Resume</h2>
+    <div class="resume" id="resume-parties"></div>
+
+    <h2>Progression des scores</h2>
+    <div id="zone-courbe"></div>
+
+    <h2>Meilleure tuile atteinte</h2>
+    <div class="barres" id="repartition"></div>
+
+    <div class="actions-panneau">
+      <button id="btn-effacer-historique">Effacer l'historique</button>
+      <button id="btn-fermer-parties">Fermer</button>
+    </div>
+  </div>
+
+  <!-- ─── Panneau Bot ─── -->
+  <div class="panneau cache" id="panneau-bot">
+    <h2>Pilotage automatique</h2>
+    <div class="rangee">
+      <button id="btn-bascule-bot">Bot : arrete</button>
+      <button id="btn-un-coup">Jouer un coup</button>
+    </div>
+    <div class="note">Raccourci clavier : <kbd>B</kbd>. Vous reprenez la main a tout moment.</div>
+
+    <h2>Vitesse</h2>
+    <div class="ligne-curseur">
+      <input type="range" id="curseur-vitesse-bot" min="0" max="500" step="10" value="180"
+             aria-label="Delai entre deux coups du bot">
+      <span id="valeur-vitesse-bot">180 ms</span>
+    </div>
+
+    <h2>Profondeur de recherche</h2>
+    <div class="rangee" id="liste-profondeurs"></div>
+    <div class="note">
+      En mode automatique, la profondeur augmente quand le plateau se remplit :
+      il reste alors peu de possibilites, donc la recherche coute moins cher.
+    </div>
+
+    <h2>Fonction d'evaluation</h2>
+    <div class="rangee" id="liste-evaluations"></div>
+    <div class="note" id="note-evaluation"></div>
+
+    <h2>Etat</h2>
+    <div class="info-bot" id="info-bot">Le bot n'a pas encore joue.</div>
+
+    <h2>Poids de l'evaluation</h2>
+    <div id="curseurs-poids"></div>
+
+    <h2>Banc d'essai</h2>
+    <div class="rangee" id="liste-nb-parties"></div>
+    <div class="rangee" style="margin-top:6px">
+      <button id="btn-banc">Mesurer</button>
+      <button id="btn-comparer">Comparer au champion</button>
+      <button id="btn-champion">Sacrer champion</button>
+      <button id="btn-arreter-banc" disabled>Arreter</button>
+    </div>
+    <div class="note">
+      Toutes les mesures utilisent les <b>memes graines aleatoires</b> : deux
+      reglages affrontent exactement les memes parties, ce qui rend la
+      comparaison fiable malgre la chance.
+    </div>
+    <div class="resultat-tests cache" id="resultat-banc"></div>
+
+    <h2>Reglage automatique</h2>
+    <div class="rangee">
+      <button id="btn-optimiser">Optimiser les poids</button>
+      <button id="btn-arreter-optim" disabled>Arreter</button>
+    </div>
+    <div class="note">
+      Descente de coordonnees : chaque poids est essaye plus haut et plus bas,
+      la meilleure valeur est conservee, et on recommence.
+    </div>
+    <div class="resultat-tests cache" id="resultat-optim"></div>
+
+    <div class="actions-panneau">
+      <button id="btn-reinitialiser-bot">Reinitialiser les poids</button>
+      <button id="btn-fermer-bot">Fermer</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+"use strict";
+
+/* ══════════════════════════════════════════════════════════
+   1. CONFIGURATION
+   ══════════════════════════════════════════════════════════ */
+const CONFIG = {
+  probabiliteQuatre: 0.1,
+  tailleHistorique: 12,
+  largeurMax: 480,
+  taillesPossibles: [3, 4, 5, 6],
+  objectifsPossibles: [128, 256, 512, 1024, 2048],
+  maxParties: 300
+};
+
+const DIRECTIONS = ["gauche", "droite", "haut", "bas"];
+const VALEURS = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+
+/*
+  Les records sont separes en deux categories : les parties jouees
+  entierement a la main, et celles ou le bot a joue au moins un coup.
+  Melanger les deux rendrait le classement personnel sans interet.
+*/
+const CLES = {
+  record:     (t, bot) => "2048-record-" + (bot ? "bot-" : "") + t,
+  recordObj:  (t, o, bot) => "2048-objectif-" + (bot ? "bot-" : "") + t + "-" + o,
+  partie:     "2048-partie",
+  parties:    "2048-parties",
+  couleurs:   "2048-couleurs",
+  animations: "2048-animations",
+  reglagesJeu:"2048-jeu"
+};
+
+/*
+  Ecriture protegee : en navigation privee ou quand le quota est
+  atteint, setItem leve une exception. Sans garde, elle interromprait
+  la fonction appelante au milieu de son travail.
+*/
+function ecrire(cle, valeur) {
+  try { localStorage.setItem(cle, valeur); return true; }
+  catch (e) { return false; }
+}
+
+function lire(cle) {
+  try { return localStorage.getItem(cle); } catch (e) { return null; }
+}
+
+function effacer(cle) {
+  try { localStorage.removeItem(cle); } catch (e) {}
+}
+
+/* ══════════════════════════════════════════════════════════
+   2. COULEURS ET THEMES
+   ══════════════════════════════════════════════════════════ */
+const THEMES = {
+  "Classique": {
+    page: "#faf8ef", plateau: "#bbada0", caseVide: "#cdc1b4", texte: "#776e65",
+    tuiles: ["#eee4da","#ede0c8","#f2b179","#f59563","#f67c5f","#f65e3b",
+             "#edcf72","#edcc61","#edc850","#edc53f","#edc22e"],
+    super: "#3c3a32"
+  },
+  /* Sombre : la luminosite croit strictement a chaque palier et la teinte
+     tourne du bleu au vert puis a l'or. Les deux indices se cumulent, ce
+     qui garde deux valeurs voisines distinctes meme sur un ecran peu
+     contraste. Rampe calculee pour un rapport de contraste constant
+     (~1.21) entre valeurs consecutives : maximum atteignable sur 11 paliers. */
+  "Sombre": {
+    page: "#0f1218", plateau: "#1b202a", caseVide: "#252b36", texte: "#e8ebf0",
+    tuiles: ["#323944","#30495a","#1c5977","#166a7e","#187b73","#229046",
+             "#639d21","#aca01c","#eaa10f","#f3b692","#fbd35d"],
+    super: "#ffffff"
+  },
+  "Neon": {
+    page: "#0d0221", plateau: "#190b33", caseVide: "#241247", texte: "#f0e6ff",
+    tuiles: ["#2d1b4e","#3d2470","#ff2ec4","#ff45a0","#ff5c7c","#ff7a45",
+             "#ffb627","#c4f000","#4bf542","#00f0c8","#00d4ff"],
+    super: "#ffffff"
+  },
+  "Ocean": {
+    page: "#eef6fa", plateau: "#8fb8cc", caseVide: "#a9cadb", texte: "#2b4a5c",
+    tuiles: ["#dcedf5","#c3e0ee","#8ecae6","#5fb0d9","#3d9bcc","#2185b8",
+             "#1a6f9e","#146083","#0f4f6b","#0a3d54","#062c3d"],
+    super: "#001f2b"
+  },
+  "Foret": {
+    page: "#f4f7ee", plateau: "#a3b18a", caseVide: "#b8c4a3", texte: "#3a4a2f",
+    tuiles: ["#e9edd8","#dbe3c2","#c2d59b","#a7c46f","#8ab54a","#6fa233",
+             "#e8b04b","#e09b2d","#d4831c","#c06a12","#a8530b"],
+    super: "#2f3a25"
+  },
+  "Bonbon": {
+    page: "#fff5f8", plateau: "#f2c1d1", caseVide: "#f8d6e0", texte: "#6b3a4b",
+    tuiles: ["#ffe8f0","#ffd4e5","#ffb3d1","#ff8fbb","#ff6ba5","#ff4790",
+             "#c98bff","#a95cff","#8b3dff","#6b2ee6","#5020c4"],
+    super: "#2d0a4a"
+  }
+};
+
+const THEME_DEFAUT = "Classique";
+let themeActuel = THEME_DEFAUT;
+let palette = null;
+
+const ENCRE_SOMBRE = "#14161a";
+const ENCRE_CLAIRE = "#fbfaf7";
+
+/* Luminance relative, formule WCAG */
+function luminance(hex) {
+  const canaux = [1, 3, 5]
+    .map(i => parseInt(hex.substr(i, 2), 16) / 255)
+    .map(v => v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+  return 0.2126 * canaux[0] + 0.7152 * canaux[1] + 0.0722 * canaux[2];
+}
+
+function contraste(a, b) {
+  const la = luminance(a), lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/* Choisit l'encre qui donne le meilleur contraste sur ce fond. Un
+   simple seuil de luminance ne suffit pas : les couleurs de luminance
+   moyenne tombent du mauvais cote et deviennent illisibles. */
+function couleurTexte(fond) {
+  return contraste(fond, ENCRE_CLAIRE) >= contraste(fond, ENCRE_SOMBRE)
+    ? ENCRE_CLAIRE : ENCRE_SOMBRE;
+}
+
+function copierTheme(nom) {
+  const t = THEMES[nom];
+  return { page: t.page, plateau: t.plateau, caseVide: t.caseVide,
+           texte: t.texte, tuiles: t.tuiles.slice(), super: t.super };
+}
+
+function eclaircir(hex, pourcent) {
+  const n = parseInt(hex.slice(1), 16);
+  const aj = v => Math.max(0, Math.min(255, Math.round(v + 255 * pourcent / 100)));
+  const r = aj((n >> 16) & 255), g = aj((n >> 8) & 255), b = aj(n & 255);
+  return "#" + ((r << 16) | (g << 8) | b).toString(16).padStart(6, "0");
+}
+
+function appliquerPalette() {
+  const r = document.documentElement.style;
+  r.setProperty("--fond-page", palette.page);
+  r.setProperty("--fond-plateau", palette.plateau);
+  r.setProperty("--case-vide", palette.caseVide);
+  r.setProperty("--texte", palette.texte);
+  r.setProperty("--bouton", palette.plateau);
+  r.setProperty("--bouton-survol", eclaircir(palette.plateau, 12));
+
+  for (const tuile of tuiles) {
+    const el = elementDe(tuile);
+    if (el) habillerTuile(el, tuile.valeur);
+  }
+  ecrire(CLES.couleurs, JSON.stringify({ theme: themeActuel, palette }));
+}
+
+function fondDe(valeur) {
+  const i = VALEURS.indexOf(valeur);
+  return i === -1 ? palette.super : palette.tuiles[i];
+}
+
+function habillerTuile(el, valeur) {
+  const fond = fondDe(valeur);
+  el.style.background = fond;
+  el.style.color = couleurTexte(fond);
+  const chiffres = String(valeur).length;
+  const facteur = chiffres <= 2 ? 0.46 : chiffres === 3 ? 0.38
+                : chiffres === 4 ? 0.30 : 0.24;
+  el.style.fontSize = (tailleCase * facteur) + "px";
+  el.setAttribute("aria-label", "Tuile " + valeur);
+}
+
+function chargerCouleurs() {
+  try {
+    const d = JSON.parse(lire(CLES.couleurs));
+    if (d && d.palette && Array.isArray(d.palette.tuiles)
+        && d.palette.tuiles.length === VALEURS.length) {
+      themeActuel = d.theme || THEME_DEFAUT;
+      palette = d.palette;
+      return;
+    }
+  } catch (e) { /* donnees illisibles */ }
+  themeActuel = THEME_DEFAUT;
+  palette = copierTheme(THEME_DEFAUT);
+}
+
+/* ══════════════════════════════════════════════════════════
+   3. ANIMATIONS ET RETOURS
+   ══════════════════════════════════════════════════════════ */
+const GLISSEMENTS = {
+  "Classique":  { duree: 150, courbe: "cubic-bezier(0.25, 0.6, 0.35, 1)" },
+  "Rapide":     { duree:  80, courbe: "cubic-bezier(0.3, 0.7, 0.4, 1)" },
+  "Fluide":     { duree: 230, courbe: "cubic-bezier(0.22, 1, 0.36, 1)" },
+  "Rebond":     { duree: 300, courbe: "cubic-bezier(0.34, 1.56, 0.64, 1)" },
+  "Souple":     { duree: 420, courbe: "cubic-bezier(0.16, 1, 0.3, 1)" },
+  "Instantane": { duree:   1, courbe: "linear" }
+};
+
+const APPARITIONS = {
+  "Zoom": "app-zoom", "Fondu": "app-fondu", "Rotation": "app-rotation",
+  "Chute": "app-chute", "Eclosion": "app-eclosion", "Aucune": null
+};
+
+const FUSIONS = {
+  "Pulsation": "fus-pulsation", "Eclat": "fus-eclat", "Secousse": "fus-secousse",
+  "Rotation": "fus-rotation", "Onde": "fus-onde", "Aucun": null
+};
+
+const CLASSES_ANIM = [...Object.values(APPARITIONS), ...Object.values(FUSIONS)].filter(Boolean);
+
+const ANIM_DEFAUT = {
+  glissement: "Classique", apparition: "Zoom", fusion: "Pulsation",
+  vitesse: 1, son: false, vibration: true
+};
+
+const ANIM_SOBRE = {
+  glissement: "Instantane", apparition: "Aucune", fusion: "Aucun",
+  vitesse: 1, son: false, vibration: true
+};
+
+let anim = { ...ANIM_DEFAUT };
+
+/* L'utilisateur a-t-il demande a son systeme de limiter les animations ? */
+function mouvementReduit() {
+  return !!(window.matchMedia
+         && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+function dureeGlissement() {
+  return Math.max(1, Math.round(GLISSEMENTS[anim.glissement].duree / anim.vitesse));
+}
+
+function appliquerAnimations() {
+  const r = document.documentElement.style;
+  r.setProperty("--duree-glissement", dureeGlissement() + "ms");
+  r.setProperty("--courbe-glissement", GLISSEMENTS[anim.glissement].courbe);
+  r.setProperty("--duree-apparition", Math.round(180 / anim.vitesse) + "ms");
+  r.setProperty("--duree-fusion", Math.round(190 / anim.vitesse) + "ms");
+  ecrire(CLES.animations, JSON.stringify(anim));
+}
+
+function chargerAnimations() {
+  try {
+    const brut = lire(CLES.animations);
+    if (brut) {
+      const d = JSON.parse(brut);
+      // on ne garde que des valeurs reconnues : des reglages devenus
+      // obsoletes ne doivent pas casser le jeu
+      anim = {
+        glissement: GLISSEMENTS[d.glissement] ? d.glissement : ANIM_DEFAUT.glissement,
+        apparition: (d.apparition in APPARITIONS) ? d.apparition : ANIM_DEFAUT.apparition,
+        fusion:     (d.fusion in FUSIONS) ? d.fusion : ANIM_DEFAUT.fusion,
+        vitesse:    (typeof d.vitesse === "number" && d.vitesse >= 0.4 && d.vitesse <= 2)
+                      ? d.vitesse : ANIM_DEFAUT.vitesse,
+        son:        !!d.son,
+        vibration:  d.vibration !== false
+      };
+      return;
+    }
+  } catch (e) { /* reglages illisibles */ }
+
+  // Premiere visite : on respecte la preference systeme
+  anim = mouvementReduit() ? { ...ANIM_SOBRE } : { ...ANIM_DEFAUT };
+}
+
+/* ─── Son, genere sans aucun fichier ────────────────────── */
+let contexteAudio = null;
+
+function jouerSon(type, valeur) {
+  if (!anim.son) return;
+  try {
+    if (!contexteAudio) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      contexteAudio = new Ctx();
+    }
+    if (contexteAudio.state === "suspended") contexteAudio.resume();
+
+    const t = contexteAudio.currentTime;
+    const osc = contexteAudio.createOscillator();
+    const gain = contexteAudio.createGain();
+    osc.connect(gain);
+    gain.connect(contexteAudio.destination);
+
+    if (type === "fusion") {
+      // plus la tuile est grosse, plus la note est haute
+      const base = 180 + 42 * Math.log2(Math.max(2, valeur));
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(base, t);
+      osc.frequency.exponentialRampToValueAtTime(base * 1.5, t + 0.07);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.10, t + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+      osc.start(t); osc.stop(t + 0.18);
+    } else if (type === "fin") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(320, t);
+      osc.frequency.exponentialRampToValueAtTime(110, t + 0.5);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.12, t + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+      osc.start(t); osc.stop(t + 0.6);
+    } else if (type === "victoire") {
+      // petit arpege ascendant
+      [523, 659, 784, 1047].forEach((f, i) => {
+        const o = contexteAudio.createOscillator(), g = contexteAudio.createGain();
+        o.connect(g); g.connect(contexteAudio.destination);
+        o.type = "triangle";
+        o.frequency.setValueAtTime(f, t + i * 0.09);
+        g.gain.setValueAtTime(0.0001, t + i * 0.09);
+        g.gain.exponentialRampToValueAtTime(0.09, t + i * 0.09 + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.09 + 0.22);
+        o.start(t + i * 0.09); o.stop(t + i * 0.09 + 0.25);
+      });
+      osc.disconnect(); gain.disconnect();
+    }
+  } catch (e) { /* audio indisponible : le jeu continue sans */ }
+}
+
+/*
+  Sur un ordinateur, navigator.vibrate existe souvent mais l'appel est
+  refuse tant que l'utilisateur n'a pas touche la page, et chaque refus
+  s'inscrit en erreur dans la console. On reserve donc la vibration aux
+  appareils reellement tactiles, ce qui correspond de toute facon a son
+  seul usage utile.
+*/
+const APPAREIL_TACTILE = !!(window.matchMedia
+  && window.matchMedia("(pointer: coarse)").matches);
+
+function vibrer(duree) {
+  if (!anim.vibration || !APPAREIL_TACTILE) return;
+  try { if (navigator.vibrate) navigator.vibrate(duree); } catch (e) {}
+}
+
+/* ══════════════════════════════════════════════════════════
+   4. ETAT DU JEU
+   ══════════════════════════════════════════════════════════
+   Une tuile garde son identite d'un coup a l'autre : c'est ce qui
+   permet de l'animer en glissement. Chaque tuile porte aussi une
+   reference vers son element DOM (`el`), pour eviter une requete a
+   chaque acces.
+   ══════════════════════════════════════════════════════════ */
+let taille = 4;
+let mode = "libre";
+let objectif = 2048;
+
+let tuiles = [];
+let score = 0, record = 0, coups = 0;
+let prochainId = 1;
+let historique = [];
+let partiesJouees = [];
+let partieTerminee = false;
+let victoireAnnoncee = false;
+let animationEnCours = false;
+let objectifAtteintCettePartie = false;
+
+/* Vrai des que le bot a joue au moins un coup dans la partie en cours.
+   Une fois vrai, il le reste : la partie n'est plus « solo ». */
+let botAJoue = false;
+
+/* Bascule la partie en categorie « avec bot » et recharge le record
+   correspondant, pour que la comparaison reste dans la bonne categorie. */
+function marquerCoupDuBot() {
+  if (botAJoue) return;
+  botAJoue = true;
+  record = parseInt(lire(CLES.record(taille, true)) || "0", 10);
+  majInterface();
+  sauvegarderPartie();
+}
+
+const elConteneur = document.getElementById("conteneur");
+const elPlateau   = document.getElementById("plateau");
+const elScore     = document.getElementById("score");
+const elRecord    = document.getElementById("record");
+const elLibRecord = document.getElementById("libelle-record");
+const elCoups     = document.getElementById("stat-coups");
+const elMax       = document.getElementById("stat-max");
+const elParties   = document.getElementById("stat-parties");
+const elAnnonce   = document.getElementById("annonce");
+const btnAnnuler  = document.getElementById("btn-annuler");
+const btnNouvelle = document.getElementById("btn-nouvelle");
+
+let tailleCase = 100, ecart = 12;
+
+function annoncer(texte) { elAnnonce.textContent = texte; }
+
+/* ══════════════════════════════════════════════════════════
+   5. DIMENSIONS RESPONSIVES
+   ══════════════════════════════════════════════════════════ */
+function calculerDimensions() {
+  const largeurDispo = Math.min(elConteneur.clientWidth, CONFIG.largeurMax);
+  // le header Orbit fait partie du flux : sa hauteur est retiree de la place dispo
+  const entete = document.querySelector("orbit-header");
+  const hauteurDispo = window.innerHeight - 250 - (entete ? entete.offsetHeight : 0);
+  const cote = Math.max(200, Math.min(largeurDispo, hauteurDispo));
+
+  ecart = cote < 340 ? 8 : 12;
+  if (taille >= 6) ecart = Math.max(5, ecart - 4);
+  else if (taille === 5) ecart = Math.max(6, ecart - 2);
+
+  tailleCase = Math.floor((cote - (taille + 1) * ecart) / taille);
+  const coteReel = taille * tailleCase + (taille + 1) * ecart;
+
+  const r = document.documentElement.style;
+  r.setProperty("--taille-case", tailleCase + "px");
+  r.setProperty("--ecart", ecart + "px");
+  r.setProperty("--cote-plateau", coteReel + "px");
+}
+
+/* ══════════════════════════════════════════════════════════
+   6. LOGIQUE DE JEU
+   ══════════════════════════════════════════════════════════ */
+function casesLibres() {
+  const occupees = new Set(tuiles.map(t => t.ligne * taille + t.colonne));
+  const libres = [];
+  for (let l = 0; l < taille; l++)
+    for (let c = 0; c < taille; c++)
+      if (!occupees.has(l * taille + c)) libres.push({ ligne: l, colonne: c });
+  return libres;
+}
+
+function ajouterTuile() {
+  const libres = casesLibres();
+  if (libres.length === 0) return null;
+  const place = libres[Math.floor(Math.random() * libres.length)];
+  const tuile = {
+    id: prochainId++,
+    valeur: Math.random() < CONFIG.probabiliteQuatre ? 4 : 2,
+    ligne: place.ligne, colonne: place.colonne,
+    nouvelle: true
+  };
+  tuiles.push(tuile);
+  return tuile;
+}
+
+/* Position reelle d'une case selon son rang dans l'ordre de parcours */
+function coordonnees(direction, indexLigne, rang, n) {
+  const dernier = (n || taille) - 1;
+  switch (direction) {
+    case "gauche": return { ligne: indexLigne, colonne: rang };
+    case "droite": return { ligne: indexLigne, colonne: dernier - rang };
+    case "haut":   return { ligne: rang, colonne: indexLigne };
+    case "bas":    return { ligne: dernier - rang, colonne: indexLigne };
+  }
+}
+
+/* Regroupe une liste de tuiles par ligne ou colonne, la plus proche
+   du bord vise en premier */
+function lignesDeParcours(liste, n, direction) {
+  const lignes = [];
+  for (let i = 0; i < n; i++) {
+    let groupe;
+    if (direction === "gauche" || direction === "droite") {
+      groupe = liste.filter(t => t.ligne === i);
+      groupe.sort((a, b) => direction === "gauche" ? a.colonne - b.colonne : b.colonne - a.colonne);
+    } else {
+      groupe = liste.filter(t => t.colonne === i);
+      groupe.sort((a, b) => direction === "haut" ? a.ligne - b.ligne : b.ligne - a.ligne);
+    }
+    lignes.push({ index: i, groupe });
+  }
+  return lignes;
+}
+
+/*
+  ═══ LE CŒUR DU JEU ═══
+  Deplace et fusionne une liste de tuiles. Modifie les positions sur
+  place, marque les tuiles absorbees et note la valeur finale des
+  tuiles issues d'une fusion — sans l'appliquer, pour que l'affichage
+  puisse d'abord animer le glissement.
+
+  C'est la SEULE implementation des regles de deplacement : la partie
+  jouee et les tests utilisent tous les deux cette fonction.
+*/
+function appliquerMouvement(liste, n, direction) {
+  let aBouge = false, gain = 0;
+  const absorbees = [], fusionnees = [];
+
+  for (const { index, groupe } of lignesDeParcours(liste, n, direction)) {
+    let rang = 0, precedente = null;
+
+    for (const tuile of groupe) {
+      // Fusion : meme valeur, et la precedente n'a pas deja fusionne
+      if (precedente && precedente.valeur === tuile.valeur && !precedente.dejaFusionnee) {
+        tuile.cible = { ligne: precedente.ligne, colonne: precedente.colonne };
+        tuile.absorbee = true;
+        absorbees.push(tuile);
+
+        precedente.dejaFusionnee = true;
+        precedente.valeurFinale = precedente.valeur * 2;
+        fusionnees.push(precedente);
+
+        gain += precedente.valeurFinale;
+        aBouge = true;
+        precedente = null;   // une tuile ne fusionne qu'une fois par coup
+      } else {
+        const pos = coordonnees(direction, index, rang, n);
+        if (pos.ligne !== tuile.ligne || pos.colonne !== tuile.colonne) aBouge = true;
+        tuile.ligne = pos.ligne;
+        tuile.colonne = pos.colonne;
+        rang++;
+        precedente = tuile;
+      }
+    }
+  }
+  return { aBouge, gain, absorbees, fusionnees };
+}
+
+/* Joue un coup. Retourne false si rien ne bouge : dans ce cas l'etat
+   du jeu est laisse strictement intact. */
+function jouerCoup(direction) {
+  const etatAvant = capturerEtat();
+  const { aBouge, gain, absorbees, fusionnees } = appliquerMouvement(tuiles, taille, direction);
+
+  if (!aBouge) { restaurerEtat(etatAvant); return false; }
+
+  historique.push(etatAvant);
+  if (historique.length > CONFIG.tailleHistorique) historique.shift();
+
+  score += gain;
+  coups++;
+  if (score > record) {
+    record = score;
+    ecrire(CLES.record(taille, botAJoue), String(record));
+  }
+
+  animerCoup(absorbees, fusionnees, gain);
+  return true;
+}
+
+/* Version pure : y a-t-il encore un coup jouable sur cette grille ? */
+function coupPossibleGrille(grille) {
+  const n = grille.length;
+  for (let l = 0; l < n; l++)
+    for (let c = 0; c < n; c++) {
+      const v = grille[l][c];
+      if (v === 0) return true;
+      if (c + 1 < n && grille[l][c + 1] === v) return true;
+      if (l + 1 < n && grille[l + 1][c] === v) return true;
+    }
+  return false;
+}
+
+function coupPossible() { return coupPossibleGrille(versGrille()); }
+
+function versGrille() {
+  const g = Array.from({ length: taille }, () => new Array(taille).fill(0));
+  for (const t of tuiles) g[t.ligne][t.colonne] = t.valeur;
+  return g;
+}
+
+function meilleureTuile() {
+  return tuiles.reduce((m, t) => Math.max(m, t.valeur), 0);
+}
+
+/* ─── Historique d'annulation ───────────────────────────── */
+function capturerEtat() {
+  return {
+    tuiles: tuiles.map(t => ({ id: t.id, valeur: t.valeur, ligne: t.ligne, colonne: t.colonne })),
+    score, coups, victoireAnnoncee
+  };
+}
+
+function restaurerEtat(etat) {
+  tuiles = etat.tuiles.map(t => ({ ...t }));   // sans reference DOM : dessiner() la recreera
+  score = etat.score;
+  coups = etat.coups;
+  victoireAnnoncee = etat.victoireAnnoncee;
+}
+
+function annuler() {
+  if (historique.length === 0 || animationEnCours) return;
+  // en mode objectif, la partie s'arrete a la cible : annuler apres coup
+  // permettrait de rejouer une partie deja comptabilisee
+  if (mode === "objectif" && objectifAtteintCettePartie) return;
+
+  restaurerEtat(historique.pop());
+  partieTerminee = false;
+  masquerSurimpression();
+  dessiner();
+  majInterface();
+  sauvegarderPartie();
+  annoncer("Coup annule. Score " + score + ".");
+}
+
+/* ══════════════════════════════════════════════════════════
+   7. AFFICHAGE ET ANIMATIONS
+   ══════════════════════════════════════════════════════════ */
+function transformation(ligne, colonne) {
+  const x = ecart + colonne * (tailleCase + ecart);
+  const y = ecart + ligne * (tailleCase + ecart);
+  return `translate(${x}px, ${y}px)`;
+}
+
+function dessinerFond() {
+  const existantes = elPlateau.querySelectorAll(".case-vide");
+  if (existantes.length === taille * taille) {
+    // meme nombre de cases : on se contente de les replacer
+    let i = 0;
+    for (let l = 0; l < taille; l++)
+      for (let c = 0; c < taille; c++)
+        existantes[i++].style.transform = transformation(l, c);
+    return;
+  }
+  existantes.forEach(e => e.remove());
+  for (let l = 0; l < taille; l++)
+    for (let c = 0; c < taille; c++) {
+      const div = document.createElement("div");
+      div.className = "case-vide";
+      div.style.transform = transformation(l, c);
+      elPlateau.appendChild(div);
+    }
+}
+
+function dessiner() {
+  elPlateau.querySelectorAll(".tuile").forEach(e => e.remove());
+  for (const tuile of tuiles) creerElement(tuile);
+}
+
+/* Replace les tuiles existantes sans les recreer ni les animer.
+   Utilise au redimensionnement : recreer tout le DOM y serait
+   inutile et ferait clignoter le plateau. */
+function repositionner() {
+  elPlateau.classList.add("sans-transition");
+  for (const tuile of tuiles) {
+    const el = elementDe(tuile);
+    if (!el) continue;
+    el.style.transform = transformation(tuile.ligne, tuile.colonne);
+    habillerTuile(el, tuile.valeur);
+  }
+  void elPlateau.offsetWidth;   // applique avant de reactiver les transitions
+  elPlateau.classList.remove("sans-transition");
+}
+
+function creerElement(tuile) {
+  const div = document.createElement("div");
+  div.className = "tuile";
+  div.dataset.id = tuile.id;
+  div.textContent = tuile.valeur;
+  div.setAttribute("role", "gridcell");
+  habillerTuile(div, tuile.valeur);
+  div.style.transform = transformation(tuile.ligne, tuile.colonne);
+
+  if (tuile.nouvelle) {
+    const classe = APPARITIONS[anim.apparition];
+    if (classe) div.classList.add(classe);
+    delete tuile.nouvelle;
+  }
+
+  // on retire la classe une fois l'animation finie, sinon elle ne
+  // pourrait plus etre rejouee sur la meme tuile
+  div.addEventListener("animationend", () => div.classList.remove(...CLASSES_ANIM));
+
+  elPlateau.appendChild(div);
+  tuile.el = div;   // reference gardee : evite une requete DOM par acces
+  return div;
+}
+
+function elementDe(tuile) {
+  if (tuile.el && tuile.el.isConnected) return tuile.el;
+  const el = elPlateau.querySelector('.tuile[data-id="' + tuile.id + '"]');
+  if (el) tuile.el = el;
+  return el;
+}
+
+/*
+  Attend la fin du glissement.
+  On ecoute `transitionend` plutot que de se fier a un minuteur : si
+  l'onglet passe en arriere-plan, les deux se desynchronisent. Un
+  minuteur de secours couvre le cas ou aucune transition ne se
+  declenche. Le premier des deux gagne, une seule fois.
+*/
+function aLaFinDuGlissement(suite) {
+  // Page masquee : aucune image n'est composee, donc `transitionend` ne
+  // se declenchera pas, et les minuteurs d'arriere-plan sont fortement
+  // brides. Il n'y a de toute facon aucune animation a regarder :
+  // on termine le coup immediatement.
+  if (document.hidden) { suite(); return; }
+
+  let fait = false;
+
+  const finir = () => {
+    if (fait) return;
+    fait = true;
+    clearTimeout(secours);
+    elPlateau.removeEventListener("transitionend", surTransition);
+    document.removeEventListener("visibilitychange", surVisibilite);
+    suite();
+  };
+
+  const surTransition = (e) => {
+    if (e.propertyName === "transform" && e.target.classList.contains("tuile")) finir();
+  };
+
+  // Si l'utilisateur quitte l'onglet pendant le glissement, on cloture
+  // tout de suite : sinon le coup resterait suspendu et le jeu figé
+  // jusqu'au retour, minuteur bride a l'appui.
+  const surVisibilite = () => { if (document.hidden) finir(); };
+
+  elPlateau.addEventListener("transitionend", surTransition);
+  document.addEventListener("visibilitychange", surVisibilite);
+  const secours = setTimeout(finir, dureeGlissement() + 90);
+}
+
+function animerCoup(absorbees, fusionnees, gain) {
+  animationEnCours = true;
+  majInterface();
+
+  // 1. glissement
+  for (const tuile of tuiles) {
+    const el = elementDe(tuile);
+    if (!el) continue;
+    const pos = tuile.absorbee
+      ? transformation(tuile.cible.ligne, tuile.cible.colonne)
+      : transformation(tuile.ligne, tuile.colonne);
+    if (tuile.absorbee) el.classList.add("absorbee");
+    el.style.transform = pos;
+  }
+
+  if (gain > 0) afficherGain(gain);
+
+  // 2. resolution des fusions, une fois le glissement termine
+  aLaFinDuGlissement(() => {
+    for (const tuile of absorbees) {
+      const el = elementDe(tuile);
+      if (el) el.remove();
+    }
+    tuiles = tuiles.filter(t => !t.absorbee);
+
+    let plusGrandeFusion = 0;
+    for (const tuile of fusionnees) {
+      tuile.valeur = tuile.valeurFinale;
+      plusGrandeFusion = Math.max(plusGrandeFusion, tuile.valeur);
+      const el = elementDe(tuile);
+      if (el) {
+        el.textContent = tuile.valeur;
+        habillerTuile(el, tuile.valeur);
+        const classe = FUSIONS[anim.fusion];
+        if (classe) {
+          el.classList.remove(...CLASSES_ANIM);
+          void el.offsetWidth;        // force le redemarrage de l'animation
+          el.classList.add(classe);
+        }
+      }
+    }
+
+    for (const t of tuiles) { delete t.dejaFusionnee; delete t.valeurFinale; delete t.cible; }
+
+    if (plusGrandeFusion > 0) {
+      jouerSon("fusion", plusGrandeFusion);
+      vibrer(plusGrandeFusion >= 128 ? 25 : 12);
+    }
+
+    const nouvelle = ajouterTuile();
+    if (nouvelle) creerElement(nouvelle);
+
+    animationEnCours = false;
+    majInterface();
+    sauvegarderPartie();
+    verifierFinDePartie();
+  });
+}
+
+function afficherGain(gain) {
+  const boite = elScore.parentElement;
+  const span = document.createElement("div");
+  span.className = "gain-score";
+  span.textContent = "+" + gain;
+  boite.appendChild(span);
+  setTimeout(() => span.remove(), 650);
+}
+
+function majInterface() {
+  elScore.textContent = score;
+  elRecord.textContent = record;
+  elCoups.textContent = coups;
+  elMax.textContent = meilleureTuile();
+  elParties.textContent = partiesJouees.length;
+  elLibRecord.textContent = "Record " + taille + "x" + taille + (botAJoue ? " (bot)" : "");
+  btnAnnuler.disabled = historique.length === 0 || animationEnCours
+                      || (mode === "objectif" && objectifAtteintCettePartie);
+}
+
+/* ══════════════════════════════════════════════════════════
+   8. FIN DE PARTIE
+   ══════════════════════════════════════════════════════════ */
+function verifierFinDePartie() {
+  const max = meilleureTuile();
+
+  // Mode objectif : la partie s'arrete des que la cible est atteinte
+  if (mode === "objectif" && max >= objectif) {
+    partieTerminee = true;
+    objectifAtteintCettePartie = true;
+    const cle = CLES.recordObj(taille, objectif, botAJoue);
+    const ancien = parseInt(lire(cle) || "0", 10);
+    const nouveauRecord = ancien === 0 || coups < ancien;
+    if (nouveauRecord) ecrire(cle, String(coups));
+
+    enregistrerPartie(true);
+    majInterface();
+    jouerSon("victoire");
+    vibrer([25, 60, 25]);
+    annoncer("Objectif " + objectif + " atteint en " + coups + " coups.");
+    afficherSurimpression("gagne", "Objectif atteint !",
+      objectif + " en <b>" + coups + " coups</b>" +
+      (nouveauRecord ? "<br>Nouveau record !" : "<br>Votre record : " + ancien + " coups"),
+      "Rejouer", true);
+    return;
+  }
+
+  // Mode libre : on signale 2048 une fois, sans arreter la partie
+  if (mode === "libre" && !victoireAnnoncee && max >= 2048) {
+    victoireAnnoncee = true;
+    sauvegarderPartie();
+    jouerSon("victoire");
+    vibrer([25, 60, 25]);
+    annoncer("Tuile 2048 atteinte.");
+    afficherSurimpression("gagne", "Gagne !", "Tuile 2048 atteinte", "Continuer", false);
+    return;
+  }
+
+  if (!coupPossible()) {
+    partieTerminee = true;
+    enregistrerPartie(false);
+    majInterface();
+    jouerSon("fin");
+    vibrer([40, 80, 40]);
+    annoncer("Partie terminee. Score " + score + ", meilleure tuile " + max + ".");
+    afficherSurimpression("perdu", "Partie terminee",
+      "Score : <b>" + score + "</b><br>Meilleure tuile : " + max +
+      " en " + coups + " coups", "Nouvelle partie", true);
+  }
+}
+
+function afficherSurimpression(type, titre, detailHtml, texteBouton, relancer) {
+  masquerSurimpression();
+  const div = document.createElement("div");
+  div.className = "surimpression " + type;
+  div.innerHTML = '<div class="titre">' + titre + '</div>' +
+                  '<div class="detail">' + detailHtml + '</div>';
+  const bouton = document.createElement("button");
+  bouton.textContent = texteBouton;
+  bouton.onclick = () => {
+    masquerSurimpression();
+    if (relancer) nouvellePartie(); else elPlateau.focus();
+  };
+  div.appendChild(bouton);
+  elPlateau.appendChild(div);
+  bouton.focus();
+}
+
+function masquerSurimpression() {
+  const s = elPlateau.querySelector(".surimpression");
+  if (s) s.remove();
+}
+
+/* ══════════════════════════════════════════════════════════
+   9. SAUVEGARDE
+   ══════════════════════════════════════════════════════════ */
+function sauvegarderPartie() {
+  if (partieTerminee) { effacer(CLES.partie); return; }
+  ecrire(CLES.partie, JSON.stringify({
+    taille, mode, objectif, score, coups, victoireAnnoncee, prochainId, botAJoue,
+    tuiles: tuiles.map(t => ({ id: t.id, valeur: t.valeur, ligne: t.ligne, colonne: t.colonne }))
+  }));
+}
+
+/* Recharge la partie interrompue. Retourne false si rien d'exploitable. */
+function reprendrePartie() {
+  let d;
+  try { d = JSON.parse(lire(CLES.partie)); } catch (e) { return false; }
+  if (!d || !Array.isArray(d.tuiles) || d.tuiles.length === 0) return false;
+  if (!CONFIG.taillesPossibles.includes(d.taille)) return false;
+
+  // coherence : toute tuile doit tenir dans la grille annoncee
+  const valide = d.tuiles.every(t =>
+    Number.isInteger(t.ligne) && Number.isInteger(t.colonne) &&
+    t.ligne >= 0 && t.ligne < d.taille && t.colonne >= 0 && t.colonne < d.taille &&
+    typeof t.valeur === "number" && t.valeur >= 2);
+  if (!valide) return false;
+
+  taille = d.taille;
+  mode = (d.mode === "objectif") ? "objectif" : "libre";
+  objectif = CONFIG.objectifsPossibles.includes(d.objectif) ? d.objectif : 2048;
+  score = d.score || 0;
+  coups = d.coups || 0;
+  victoireAnnoncee = !!d.victoireAnnoncee;
+  botAJoue = !!d.botAJoue;
+  tuiles = d.tuiles.map(t => ({ ...t }));
+  prochainId = d.prochainId || (Math.max(...tuiles.map(t => t.id)) + 1);
+  historique = [];
+  partieTerminee = false;
+  objectifAtteintCettePartie = false;
+  return true;
+}
+
+function chargerParties() {
+  try {
+    const d = JSON.parse(lire(CLES.parties));
+    partiesJouees = Array.isArray(d) ? d : [];
+  } catch (e) { partiesJouees = []; }
+}
+
+function enregistrerPartie(objectifAtteint) {
+  partiesJouees.push({
+    d: Date.now(), s: score, m: meilleureTuile(), c: coups,
+    t: taille, mode, obj: mode === "objectif" ? objectif : 0,
+    ok: !!objectifAtteint, bot: botAJoue
+  });
+  if (partiesJouees.length > CONFIG.maxParties)
+    partiesJouees = partiesJouees.slice(-CONFIG.maxParties);
+  ecrire(CLES.parties, JSON.stringify(partiesJouees));
+  effacer(CLES.partie);
+}
+
+function sauvegarderReglagesJeu() {
+  ecrire(CLES.reglagesJeu, JSON.stringify({ taille, mode, objectif }));
+}
+
+function chargerReglagesJeu() {
+  try {
+    const d = JSON.parse(lire(CLES.reglagesJeu));
+    if (d) {
+      if (CONFIG.taillesPossibles.includes(d.taille)) taille = d.taille;
+      if (d.mode === "objectif" || d.mode === "libre") mode = d.mode;
+      if (CONFIG.objectifsPossibles.includes(d.objectif)) objectif = d.objectif;
+    }
+  } catch (e) { /* valeurs par defaut */ }
+}
+
+/* ══════════════════════════════════════════════════════════
+   10. CONTROLES — FLECHES DU CLAVIER
+   ══════════════════════════════════════════════════════════ */
+const TOUCHES = {
+  ArrowLeft: "gauche", ArrowRight: "droite", ArrowUp: "haut", ArrowDown: "bas"
+};
+
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && (e.key === "z" || e.key === "Z")) { e.preventDefault(); annuler(); return; }
+  if (e.target.tagName === "INPUT") return;
+
+  // B : demarre ou arrete le bot
+  if (!e.ctrlKey && !e.altKey && (e.key === "b" || e.key === "B")) {
+    e.preventDefault(); basculerBot(); return;
+  }
+
+  const direction = TOUCHES[e.key];
+  if (!direction) return;
+  e.preventDefault();   // empeche le defilement de la page
+
+  // une fleche pendant que le bot joue : l'utilisateur reprend la main
+  if (botActif) arreterBot("Repris en main par le joueur.");
+  tenterCoup(direction);
+});
+
+function tenterCoup(direction) {
+  if (partieTerminee || animationEnCours) return;
+  jouerCoup(direction);
+}
+
+/* ─── Balayage tactile ──────────────────────────────────── */
+let departX = 0, departY = 0, balayageActif = false;
+const SEUIL_BALAYAGE = 25;
+
+elPlateau.addEventListener("touchstart", (e) => {
+  if (e.touches.length !== 1) return;
+  departX = e.touches[0].clientX;
+  departY = e.touches[0].clientY;
+  balayageActif = true;
+}, { passive: true });
+
+elPlateau.addEventListener("touchmove", (e) => {
+  if (balayageActif) e.preventDefault();
+}, { passive: false });
+
+elPlateau.addEventListener("touchend", (e) => {
+  if (!balayageActif) return;
+  balayageActif = false;
+  const dx = e.changedTouches[0].clientX - departX;
+  const dy = e.changedTouches[0].clientY - departY;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < SEUIL_BALAYAGE) return;
+  if (Math.abs(dx) > Math.abs(dy)) tenterCoup(dx > 0 ? "droite" : "gauche");
+  else                             tenterCoup(dy > 0 ? "bas" : "haut");
+});
+
+/* ══════════════════════════════════════════════════════════
+   11. PANNEAUX
+   ══════════════════════════════════════════════════════════ */
+const PANNEAUX = {
+  "panneau-jeu":        { bouton: "btn-jeu",        construire: () => construirePanneauJeu() },
+  "panneau-couleurs":   { bouton: "btn-couleurs",   construire: () => construirePanneauCouleurs() },
+  "panneau-animations": { bouton: "btn-animations", construire: () => construirePanneauAnim() },
+  "panneau-parties":    { bouton: "btn-parties",    construire: () => construirePanneauParties() },
+  "panneau-bot":        { bouton: "btn-bot",        construire: () => construirePanneauBot() }
+};
+
+function fermerTousLesPanneaux() {
+  for (const [id, def] of Object.entries(PANNEAUX)) {
+    document.getElementById(id).classList.add("cache");
+    document.getElementById(def.bouton).setAttribute("aria-expanded", "false");
+  }
+}
+
+/* Un seul panneau ouvert a la fois */
+function basculerPanneau(id) {
+  const cible = document.getElementById(id);
+  const ouvrir = cible.classList.contains("cache");
+  fermerTousLesPanneaux();
+  if (ouvrir) {
+    PANNEAUX[id].construire();
+    cible.classList.remove("cache");
+    document.getElementById(PANNEAUX[id].bouton).setAttribute("aria-expanded", "true");
+    // "start" plutot que "nearest" : sur une petite fenetre, un panneau
+    // partiellement visible ne declenchait aucun defilement et passait
+    // pour absent
+    cible.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+for (const [id, def] of Object.entries(PANNEAUX))
+  document.getElementById(def.bouton).addEventListener("click", () => basculerPanneau(id));
+
+["btn-fermer-jeu", "btn-fermer-couleurs", "btn-fermer-anim", "btn-fermer-parties", "btn-fermer-bot"]
+  .forEach(id => document.getElementById(id).addEventListener("click", () => {
+    fermerTousLesPanneaux();
+    elPlateau.focus();
+  }));
+
+/* Rangee de boutons de choix mutuellement exclusifs */
+function rangeeChoix(conteneurId, options, valeurActive, auChoix) {
+  const conteneur = document.getElementById(conteneurId);
+  conteneur.innerHTML = "";
+  for (const opt of options) {
+    const b = document.createElement("button");
+    b.textContent = opt.libelle;
+    b.dataset.valeur = String(opt.valeur);
+    b.setAttribute("aria-pressed", opt.valeur === valeurActive ? "true" : "false");
+    if (opt.valeur === valeurActive) b.classList.add("actif");
+    b.onclick = () => {
+      conteneur.querySelectorAll("button").forEach(x => {
+        const actif = x.dataset.valeur === String(opt.valeur);
+        x.classList.toggle("actif", actif);
+        x.setAttribute("aria-pressed", actif ? "true" : "false");
+      });
+      auChoix(opt.valeur);
+    };
+    conteneur.appendChild(b);
+  }
+}
+
+/* ─── Panneau Jeu ───────────────────────────────────────── */
+function construirePanneauJeu() {
+  rangeeChoix("liste-tailles",
+    CONFIG.taillesPossibles.map(n => ({ libelle: n + " x " + n, valeur: n })),
+    taille,
+    (n) => {
+      if (n === taille) return;
+      taille = n;
+      sauvegarderReglagesJeu();
+      effacer(CLES.partie);        // la partie en cours ne vaut plus
+      record = parseInt(lire(CLES.record(taille, botAJoue)) || "0", 10);
+      calculerDimensions();
+      dessinerFond();
+      nouvellePartie();
+      construirePanneauJeu();
+      annoncer("Grille " + n + " sur " + n + ". Nouvelle partie.");
+    });
+
+  rangeeChoix("liste-modes",
+    [{ libelle: "Libre", valeur: "libre" }, { libelle: "Objectif", valeur: "objectif" }],
+    mode,
+    (m) => {
+      mode = m;
+      sauvegarderReglagesJeu();
+      document.getElementById("bloc-objectif").classList.toggle("cache", mode !== "objectif");
+      majNoteObjectif();
+      nouvellePartie();
+    });
+
+  rangeeChoix("liste-objectifs",
+    CONFIG.objectifsPossibles.map(o => ({ libelle: String(o), valeur: o })),
+    objectif,
+    (o) => { objectif = o; sauvegarderReglagesJeu(); majNoteObjectif(); nouvellePartie(); });
+
+  document.getElementById("bloc-objectif").classList.toggle("cache", mode !== "objectif");
+  majNoteObjectif();
+  construireTableauRecords();
+}
+
+function majNoteObjectif() {
+  const note = document.getElementById("note-objectif");
+  const solo = parseInt(lire(CLES.recordObj(taille, objectif, false)) || "0", 10);
+  const bot  = parseInt(lire(CLES.recordObj(taille, objectif, true))  || "0", 10);
+  note.innerHTML = "Atteindre " + objectif + " en un minimum de coups.<br>" +
+    "Solo : " + (solo > 0 ? "<b>" + solo + " coups</b>" : "aucun record") +
+    " &middot; avec bot : " + (bot > 0 ? "<b>" + bot + " coups</b>" : "aucun record");
+}
+
+/*
+  Deux tableaux distincts : les parties menees entierement a la main et
+  celles ou le bot est intervenu. Un record obtenu avec l'aide du bot
+  n'a pas la meme valeur qu'un record personnel.
+*/
+function construireTableauRecords() {
+  const zone = document.getElementById("zone-records");
+
+  const tableau = (avecBot) => {
+    let auMoinsUn = false;
+    const entete = "<tr><th>Grille</th><th>Score</th>" +
+      CONFIG.objectifsPossibles.map(o => "<th>" + o + "</th>").join("") + "</tr>";
+
+    const lignes = CONFIG.taillesPossibles.map(t => {
+      const sc = parseInt(lire(CLES.record(t, avecBot)) || "0", 10);
+      if (sc > 0) auMoinsUn = true;
+      const celluleScore = sc > 0
+        ? "<td>" + sc.toLocaleString("fr-FR") + "</td>"
+        : '<td class="vide">&mdash;</td>';
+
+      const cellules = CONFIG.objectifsPossibles.map(o => {
+        const r = parseInt(lire(CLES.recordObj(t, o, avecBot)) || "0", 10);
+        if (r > 0) auMoinsUn = true;
+        return r > 0 ? "<td>" + r + "</td>" : '<td class="vide">&mdash;</td>';
+      }).join("");
+
+      return "<tr><th>" + t + "x" + t + "</th>" + celluleScore + cellules + "</tr>";
+    }).join("");
+
+    return auMoinsUn
+      ? '<table class="tableau-records">' + entete + lignes + '</table>'
+      : '<div class="note">Rien d\'enregistre dans cette categorie.</div>';
+  };
+
+  zone.innerHTML =
+    '<div class="sous-titre">Parties solo</div>' + tableau(false) +
+    '<div class="sous-titre">Parties ou le bot est intervenu</div>' + tableau(true) +
+    '<div class="note">Colonne Score : meilleur score. Colonnes chiffrees : ' +
+    'nombre de coups pour atteindre l\'objectif, plus bas est meilleur.</div>';
+}
+
+/* ─── Panneau Couleurs ──────────────────────────────────── */
+function construirePanneauCouleurs() {
+  const liste = document.getElementById("liste-themes");
+  liste.innerHTML = "";
+  for (const nom of Object.keys(THEMES)) {
+    const b = document.createElement("button");
+    b.textContent = nom;
+    b.dataset.theme = nom;
+    b.setAttribute("aria-pressed", nom === themeActuel ? "true" : "false");
+    if (nom === themeActuel) b.classList.add("actif");
+    b.onclick = () => {
+      themeActuel = nom;
+      palette = copierTheme(nom);
+      appliquerPalette();
+      construirePanneauCouleurs();
+    };
+    liste.appendChild(b);
+  }
+
+  const grille = document.getElementById("couleurs-tuiles");
+  grille.innerHTML = "";
+  VALEURS.forEach((valeur, i) => {
+    grille.appendChild(champCouleur(String(valeur), palette.tuiles[i], (c) => {
+      palette.tuiles[i] = c; passerEnPersonnalise();
+    }));
+  });
+  grille.appendChild(champCouleur("4096+", palette.super, (c) => {
+    palette.super = c; passerEnPersonnalise();
+  }));
+
+  const pg = document.getElementById("couleurs-plateau");
+  pg.innerHTML = "";
+  for (const [libelle, cle] of [["Fond","page"],["Grille","plateau"],["Cases","caseVide"],["Texte","texte"]])
+    pg.appendChild(champCouleur(libelle, palette[cle], (c) => {
+      palette[cle] = c; passerEnPersonnalise();
+    }));
+}
+
+function passerEnPersonnalise() {
+  themeActuel = "Personnalise";
+  appliquerPalette();
+  document.querySelectorAll("#liste-themes button").forEach(b => {
+    b.classList.remove("actif");
+    b.setAttribute("aria-pressed", "false");
+  });
+}
+
+function champCouleur(libelle, valeur, auChangement) {
+  const bloc = document.createElement("div");
+  bloc.className = "champ-couleur";
+  const id = "coul-" + libelle.replace(/\W/g, "");
+  const lab = document.createElement("label");
+  lab.textContent = libelle;
+  lab.setAttribute("for", id);
+  const input = document.createElement("input");
+  input.type = "color";
+  input.id = id;
+  input.value = valeur;
+  input.addEventListener("input", () => auChangement(input.value));
+  bloc.appendChild(lab); bloc.appendChild(input);
+  return bloc;
+}
+
+document.getElementById("btn-reinitialiser-couleurs").addEventListener("click", () => {
+  themeActuel = THEME_DEFAUT;
+  palette = copierTheme(THEME_DEFAUT);
+  appliquerPalette();
+  construirePanneauCouleurs();
+});
+
+/* ─── Panneau Animations ────────────────────────────────── */
+function construirePanneauAnim() {
+  const en = (obj) => Object.keys(obj).map(k => ({ libelle: k, valeur: k }));
+
+  rangeeChoix("liste-glissements", en(GLISSEMENTS), anim.glissement,
+    (v) => { anim.glissement = v; appliquerAnimations(); apercuAnimations(); });
+  rangeeChoix("liste-apparitions", en(APPARITIONS), anim.apparition,
+    (v) => { anim.apparition = v; appliquerAnimations(); apercuAnimations(); });
+  rangeeChoix("liste-fusions", en(FUSIONS), anim.fusion,
+    (v) => { anim.fusion = v; appliquerAnimations(); apercuAnimations(); });
+
+  // deux bascules independantes : son et vibration
+  const retours = document.getElementById("liste-retours");
+  retours.innerHTML = "";
+  const bascule = (libelle, cle, apres) => {
+    const b = document.createElement("button");
+    const maj = () => {
+      b.textContent = libelle + " : " + (anim[cle] ? "oui" : "non");
+      b.classList.toggle("actif", !!anim[cle]);
+      b.setAttribute("aria-pressed", anim[cle] ? "true" : "false");
+    };
+    b.onclick = () => { anim[cle] = !anim[cle]; appliquerAnimations(); maj(); if (apres) apres(); };
+    maj();
+    retours.appendChild(b);
+  };
+  bascule("Son", "son", () => { if (anim.son) jouerSon("fusion", 16); });
+  bascule("Vibration", "vibration", () => { if (anim.vibration) vibrer(20); });
+
+  const curseur = document.getElementById("curseur-vitesse");
+  curseur.value = anim.vitesse;
+  document.getElementById("valeur-vitesse").textContent = "x" + anim.vitesse.toFixed(1);
+
+  const note = document.getElementById("note-mouvement");
+  const messages = [];
+  if (mouvementReduit())
+    messages.push("Votre systeme demande de limiter les animations : le jeu a demarre sans effets.");
+  if (!APPAREIL_TACTILE)
+    messages.push("La vibration ne s'applique qu'aux appareils tactiles.");
+  note.textContent = messages.join(" ");
+}
+
+document.getElementById("curseur-vitesse").addEventListener("input", (e) => {
+  anim.vitesse = parseFloat(e.target.value);
+  document.getElementById("valeur-vitesse").textContent = "x" + anim.vitesse.toFixed(1);
+  appliquerAnimations();
+});
+
+document.getElementById("curseur-vitesse").addEventListener("change", apercuAnimations);
+
+/* Rejoue les effets sur les tuiles presentes, pour juger d'un reglage
+   sans avoir a jouer un coup */
+function apercuAnimations() {
+  if (animationEnCours) return;
+  const classeApp = APPARITIONS[anim.apparition];
+  const classeFus = FUSIONS[anim.fusion];
+  [...elPlateau.querySelectorAll(".tuile")].forEach((el, i) => {
+    el.classList.remove(...CLASSES_ANIM);
+    void el.offsetWidth;
+    const classe = (i % 2 === 0) ? classeApp : classeFus;
+    if (classe) el.classList.add(classe);
+  });
+}
+
+document.getElementById("btn-apercu-anim").addEventListener("click", apercuAnimations);
+
+document.getElementById("btn-reinitialiser-anim").addEventListener("click", () => {
+  anim = { ...ANIM_DEFAUT };
+  appliquerAnimations();
+  construirePanneauAnim();
+  apercuAnimations();
+});
+
+/* ─── Panneau Parties ───────────────────────────────────── */
+let filtreTaille = 0;      // 0 = toutes les tailles
+let filtreBot = "tout";    // "tout" | "solo" | "bot"
+
+function partiesFiltrees() {
+  return partiesJouees.filter(p =>
+    (filtreTaille === 0 || p.t === filtreTaille) &&
+    (filtreBot === "tout" || (filtreBot === "bot" ? !!p.bot : !p.bot)));
+}
+
+function construirePanneauParties() {
+  // filtres : seulement les tailles reellement jouees
+  const taillesJouees = [...new Set(partiesJouees.map(p => p.t))].sort((a, b) => a - b);
+  if (filtreTaille !== 0 && !taillesJouees.includes(filtreTaille)) filtreTaille = 0;
+
+  rangeeChoix("liste-filtres",
+    [{ libelle: "Toutes", valeur: 0 }]
+      .concat(taillesJouees.map(t => ({ libelle: t + " x " + t, valeur: t }))),
+    filtreTaille,
+    (v) => { filtreTaille = v; majAffichageParties(); });
+
+  const nbSolo = partiesJouees.filter(p => !p.bot).length;
+  const nbBot  = partiesJouees.filter(p => !!p.bot).length;
+
+  rangeeChoix("liste-filtres-bot",
+    [{ libelle: "Tout (" + partiesJouees.length + ")", valeur: "tout" },
+     { libelle: "Solo (" + nbSolo + ")", valeur: "solo" },
+     { libelle: "Avec bot (" + nbBot + ")", valeur: "bot" }],
+    filtreBot,
+    (v) => { filtreBot = v; majAffichageParties(); });
+
+  majAffichageParties();
+}
+
+function majAffichageParties() {
+  const parties = partiesFiltrees();
+  const n = parties.length;
+  const scores = parties.map(p => p.s);
+  const meilleur = n ? Math.max(...scores) : 0;
+  const moyen = n ? Math.round(scores.reduce((a, b) => a + b, 0) / n) : 0;
+  const maxTuile = n ? Math.max(...parties.map(p => p.m)) : 0;
+  const coupsTotal = parties.reduce((a, p) => a + p.c, 0);
+
+  document.getElementById("resume-parties").innerHTML = [
+    ["Parties", n], ["Meilleur score", meilleur], ["Score moyen", moyen],
+    ["Meilleure tuile", maxTuile], ["Coups joues", coupsTotal]
+  ].map(([l, v]) =>
+    '<div><div class="libelle">' + l + '</div><div class="valeur">' + v + '</div></div>'
+  ).join("");
+
+  const libTaille = filtreTaille === 0 ? "toutes tailles" : filtreTaille + "x" + filtreTaille;
+  const libBot = filtreBot === "tout" ? "solo et bot"
+               : filtreBot === "solo" ? "solo uniquement" : "avec bot";
+  document.getElementById("zone-courbe").innerHTML =
+    dessinerCourbe(scores.slice(-60), libTaille + ", " + libBot);
+
+  const comptes = new Map();
+  for (const p of parties) comptes.set(p.m, (comptes.get(p.m) || 0) + 1);
+  const cles = [...comptes.keys()].sort((a, b) => a - b);
+  const maxCompte = cles.length ? Math.max(...cles.map(k => comptes.get(k))) : 1;
+
+  document.getElementById("repartition").innerHTML = cles.length
+    ? cles.map(k =>
+        '<div class="barre-ligne"><span class="etiquette">' + k + '</span>' +
+        '<span class="piste"><span class="remplissage" style="width:' +
+        (comptes.get(k) / maxCompte * 100) + '%"></span></span>' +
+        '<span class="compte">' + comptes.get(k) + '</span></div>').join("")
+    : '<div class="note">Aucune partie terminee pour cette selection.</div>';
+}
+
+/* Courbe des scores, en SVG pur : aucune librairie */
+function dessinerCourbe(scores, sousTitre) {
+  if (scores.length < 2)
+    return '<div class="note">Il faut au moins deux parties terminees pour tracer une courbe.</div>';
+
+  const L = 440, H = 130, marge = 10, margeBas = 18;
+  const max = Math.max(...scores);
+  const pointX = i => marge + i * (L - 2 * marge) / (scores.length - 1);
+  const pointY = s => H - margeBas - (s / (max || 1)) * (H - marge - margeBas);
+
+  const points = scores.map((s, i) => pointX(i).toFixed(1) + "," + pointY(s).toFixed(1)).join(" ");
+  const zone = marge + "," + (H - margeBas) + " " + points + " " +
+               pointX(scores.length - 1).toFixed(1) + "," + (H - margeBas);
+  const moyenne = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const yMoy = pointY(moyenne).toFixed(1);
+
+  return '<svg class="courbe" viewBox="0 0 ' + L + ' ' + H + '" preserveAspectRatio="none" ' +
+    'role="img" aria-label="Progression des scores sur ' + scores.length + ' parties, ' +
+    'maximum ' + max + ', moyenne ' + Math.round(moyenne) + '">' +
+    '<polygon class="zone" points="' + zone + '"/>' +
+    '<line class="repere" x1="' + marge + '" y1="' + yMoy + '" x2="' + (L - marge) + '" y2="' + yMoy + '"/>' +
+    '<polyline points="' + points + '"/>' +
+    '<text x="' + marge + '" y="' + (H - 4) + '">' + scores.length + ' parties &middot; ' + sousTitre + '</text>' +
+    '<text x="' + (L - marge) + '" y="' + (H - 4) + '" text-anchor="end">' +
+      'max ' + max + ' &middot; moyenne ' + Math.round(moyenne) + '</text>' +
+    '</svg>';
+}
+
+document.getElementById("btn-effacer-historique").addEventListener("click", () => {
+  partiesJouees = [];
+  filtreTaille = 0;
+  effacer(CLES.parties);
+  construirePanneauParties();
+  majInterface();
+});
+
+/* ══════════════════════════════════════════════════════════
+   12. TESTS AUTOMATISES
+   ══════════════════════════════════════════════════════════ */
+
+/*
+  Rejoue un coup en passant par `appliquerMouvement`, c'est-a-dire par
+  le code reellement utilise pendant une partie, et renvoie le
+  resultat sous forme de grille de nombres. Permet de comparer le
+  moteur du jeu a la version pure `glisser`.
+*/
+function simulerAvecTuiles(grille, direction) {
+  const n = grille.length;
+  const liste = [];
+  let id = 1;
+  for (let l = 0; l < n; l++)
+    for (let c = 0; c < n; c++)
+      if (grille[l][c]) liste.push({ id: id++, valeur: grille[l][c], ligne: l, colonne: c });
+
+  const r = appliquerMouvement(liste, n, direction);
+
+  const sortie = Array.from({ length: n }, () => new Array(n).fill(0));
+  for (const t of liste) {
+    if (t.absorbee) continue;
+    sortie[t.ligne][t.colonne] = t.valeurFinale || t.valeur;
+  }
+  return { grille: sortie, gain: r.gain, aBouge: r.aBouge };
+}
+
+/* Grille aleatoire plausible : cases vides et puissances de deux */
+function grilleAleatoire(n) {
+  const g = Array.from({ length: n }, () => new Array(n).fill(0));
+  for (let l = 0; l < n; l++)
+    for (let c = 0; c < n; c++) {
+      const d = Math.random();
+      if (d < 0.35) g[l][c] = 0;
+      else g[l][c] = Math.pow(2, 1 + Math.floor(Math.random() * 6));
+    }
+  return g;
+}
+
+function lancerTests() {
+  const resultats = [];
+  const verifier = (nom, obtenu, attendu) => {
+    const o = JSON.stringify(obtenu), a = JSON.stringify(attendu);
+    resultats.push({ nom, ok: o === a, obtenu: o, attendu: a });
+  };
+
+  const L = (...lignes) => lignes.map(l => l.slice());
+  const Z4 = [[0,0,0,0],[0,0,0,0],[0,0,0,0]];
+
+  // ─── Fusions simples ───
+  verifier("[2,2,4,4] gauche", glisser(L([2,2,4,4], ...Z4), "gauche").grille[0], [4,8,0,0]);
+  verifier("[2,2,4,4] droite", glisser(L([2,2,4,4], ...Z4), "droite").grille[0], [0,0,4,8]);
+  verifier("[4,4,4,4] gauche : deux fusions distinctes",
+    glisser(L([4,4,4,4], ...Z4), "gauche").grille[0], [8,8,0,0]);
+  verifier("[2,2,2,2] gauche", glisser(L([2,2,2,2], ...Z4), "gauche").grille[0], [4,4,0,0]);
+
+  // ─── Pas de double fusion ───
+  verifier("[2,2,2,0] gauche : fusion du cote pousse",
+    glisser(L([2,2,2,0], ...Z4), "gauche").grille[0], [4,2,0,0]);
+  verifier("[2,2,2,0] droite : symetrique",
+    glisser(L([2,2,2,0], ...Z4), "droite").grille[0], [0,0,2,4]);
+  verifier("[4,4,8,0] gauche : le 8 ne refusionne pas",
+    glisser(L([4,4,8,0], ...Z4), "gauche").grille[0], [8,8,0,0]);
+
+  // ─── Glissement sans fusion ───
+  verifier("[0,0,0,2] gauche", glisser(L([0,0,0,2], ...Z4), "gauche").grille[0], [2,0,0,0]);
+  verifier("[2,0,0,2] gauche : fusion a distance",
+    glisser(L([2,0,0,2], ...Z4), "gauche").grille[0], [4,0,0,0]);
+  verifier("[0,2,0,4] droite", glisser(L([0,2,0,4], ...Z4), "droite").grille[0], [0,0,2,4]);
+
+  // ─── Coups invalides ───
+  verifier("[2,4,2,4] gauche : aucun mouvement",
+    glisser(L([2,4,2,4], ...Z4), "gauche").aBouge, false);
+  verifier("grille vide : aucun mouvement",
+    glisser(L([0,0,0,0], ...Z4), "haut").aBouge, false);
+  verifier("[4,2,0,0] gauche : deja compacte",
+    glisser(L([4,2,0,0], ...Z4), "gauche").aBouge, false);
+
+  // ─── Colonnes ───
+  const colonne = [[2,0,0,0],[2,0,0,0],[4,0,0,0],[4,0,0,0]];
+  verifier("colonne vers le haut", glisser(colonne, "haut").grille.map(l => l[0]), [4,8,0,0]);
+  verifier("colonne vers le bas",  glisser(colonne, "bas").grille.map(l => l[0]),  [0,0,4,8]);
+
+  // ─── Score ───
+  verifier("gain de [2,2,4,4] gauche", glisser(L([2,2,4,4], ...Z4), "gauche").gain, 12);
+  verifier("gain de [8,8,8,8] gauche", glisser(L([8,8,8,8], ...Z4), "gauche").gain, 32);
+  verifier("gain d'un simple glissement", glisser(L([0,0,0,2], ...Z4), "gauche").gain, 0);
+
+  // ─── Fin de partie ───
+  verifier("plateau plein sans fusion possible",
+    coupPossibleGrille([[2,4,2,4],[4,2,4,2],[2,4,2,4],[4,2,4,2]]), false);
+  verifier("plateau plein avec une fusion possible",
+    coupPossibleGrille([[2,4,2,4],[4,2,4,2],[2,4,2,4],[4,2,2,4]]), true);
+  verifier("plateau avec une case libre",
+    coupPossibleGrille([[2,4,2,4],[4,2,4,2],[2,4,2,4],[4,2,4,0]]), true);
+
+  // ─── Autres tailles ───
+  verifier("grille 3x3, [2,2,2] gauche",
+    glisser([[2,2,2],[0,0,0],[0,0,0]], "gauche").grille[0], [4,2,0]);
+  verifier("grille 5x5, [2,2,2,2,4] gauche",
+    glisser([[2,2,2,2,4],[0,0,0,0,0],[0,0,0,0,0],[0,0,0,0,0],[0,0,0,0,0]],
+            "gauche").grille[0], [4,4,4,0,0]);
+
+  // ─── Purete ───
+  const original = L([2,2,4,4], ...Z4);
+  const copie = JSON.stringify(original);
+  glisser(original, "gauche");
+  verifier("glisser() ne modifie pas la grille d'entree", JSON.stringify(original), copie);
+
+  /*
+    ─── Test croise : le moteur du jeu contre la version pure ───
+    Les regles existent en deux endroits : `appliquerMouvement`, qui
+    joue la partie, et `glisser`, sur laquelle portent les tests
+    ci-dessus. Sans cette comparaison, les deux pourraient diverger
+    sans qu'aucun test ne s'en apercoive.
+  */
+  let divergences = 0, comparaisons = 0, exemple = null;
+  for (const n of [3, 4, 5, 6]) {
+    for (let essai = 0; essai < 150; essai++) {
+      const g = grilleAleatoire(n);
+      for (const dir of DIRECTIONS) {
+        const a = glisser(g, dir);
+        const b = simulerAvecTuiles(g, dir);
+        comparaisons++;
+        if (JSON.stringify(a.grille) !== JSON.stringify(b.grille) ||
+            a.gain !== b.gain || a.aBouge !== b.aBouge) {
+          divergences++;
+          if (!exemple) exemple = { grille: g, dir, pur: a, moteur: b };
+        }
+      }
+    }
+  }
+  resultats.push({
+    nom: "test croise moteur/version pure (" + comparaisons + " comparaisons)",
+    ok: divergences === 0,
+    obtenu: divergences + " divergence(s)" + (exemple ? " ex. " + JSON.stringify(exemple) : ""),
+    attendu: "0 divergence"
+  });
+
+  const echecs = resultats.filter(r => !r.ok);
+  return { total: resultats.length, echecs: echecs.length, resultats };
+}
+
+document.getElementById("btn-tests").addEventListener("click", () => {
+  const zone = document.getElementById("resultat-tests");
+  const r = lancerTests();
+  const lignes = r.resultats.map(t => t.ok
+    ? '<span class="ok">OK  </span> ' + t.nom
+    : '<span class="echec">ECHEC</span> ' + t.nom +
+      '\n        obtenu ' + t.obtenu + '\n        attendu ' + t.attendu);
+  zone.innerHTML =
+    (r.echecs === 0
+      ? '<span class="ok">' + r.total + ' tests passes, aucun echec.</span>'
+      : '<span class="echec">' + r.echecs + ' echec(s) sur ' + r.total + ' tests.</span>') +
+    "\n\n" + lignes.join("\n");
+  zone.classList.remove("cache");
+});
+
+/* ══════════════════════════════════════════════════════════
+   12 bis. LE BOT — recherche expectimax
+   ══════════════════════════════════════════════════════════
+   Le bot raisonne uniquement sur des grilles de nombres, via la
+   fonction pure `glisser`. Il ne touche jamais a l'affichage : il
+   se contente de choisir une direction, puis joue le coup comme le
+   ferait un appui sur une fleche.
+
+   L'arbre alterne deux types de nœuds :
+     - MAX    : c'est au joueur, on prend la meilleure des 4 directions
+     - CHANCE : une tuile apparait au hasard, on fait la moyenne
+                ponderee (90% un 2, 10% un 4) sur les cases libres
+
+   C'est ce nœud CHANCE qui distingue l'expectimax du minimax : le
+   hasard n'est pas un adversaire qui choisit le pire coup, il suit
+   une loi de probabilite connue.
+   ══════════════════════════════════════════════════════════ */
+
+/* Poids de la fonction d'evaluation. Reglables depuis le panneau Bot. */
+const POIDS_DEFAUT = {
+  casesVides: 2.7,   // garder de la place : de loin le critere le plus important
+  monotonie: 1.0,    // valeurs qui decroissent regulierement le long des lignes
+  lissage:   0.35,   // eviter les grosses differences entre voisines
+  coin:      1.4,    // garder la plus grosse tuile dans un coin
+  bordure:   0.6,    // aligner les grandes tuiles le long d'un bord
+  gradient:  1.0     // adherence au serpent (mode Gradient uniquement)
+};
+
+let POIDS = { ...POIDS_DEFAUT };
+
+const BORNES_POIDS = {
+  casesVides: 8, monotonie: 3, lissage: 2, coin: 4, bordure: 3, gradient: 4
+};
+
+/* Quels poids servent reellement, selon le mode d'evaluation */
+const POIDS_UTILISES = {
+  criteres: ["casesVides", "monotonie", "lissage", "coin", "bordure"],
+  gradient: ["casesVides", "gradient", "lissage"]
+};
+
+/* Mode par defaut : « criteres ».
+   Ce n'est pas un choix d'intuition — sur les memes graines, il tient le
+   maximum dans un coin 99 % du temps contre 63 % pour le serpent, pour un
+   score presque double. Le mode Gradient reste disponible : il a moins de
+   poids a regler, donc plus de marge de progression via l'optimiseur. */
+let modeEvaluation = "criteres";
+let botActif = false;
+let vitesseBot = 180;          // ms entre deux coups
+let profondeurChoisie = 0;     // 0 = automatique
+let minuteurBot = null;
+let noeudsExplores = 0;
+let bancEnCours = false;
+let optimEnCours = false;
+let nbPartiesBanc = 25;
+
+/* Sous ce seuil, une branche est trop improbable pour meriter d'etre
+   fouillee : on l'evalue directement. Remplace avantageusement une
+   limite de largeur fixe, car il concentre l'effort la ou il compte. */
+const SEUIL_PROBA = 0.0035;
+
+/* ══════════════════════════════════════════════════════════
+   Representation compacte (grilles 4x4)
+   ══════════════════════════════════════════════════════════
+   Une ligne de 4 cases tient dans 16 bits : 4 bits par case, qui
+   stockent l'exposant (0 = vide, 1 = tuile 2, 11 = tuile 2048).
+   Il n'y a donc que 65 536 lignes possibles : on precalcule une fois
+   pour toutes le resultat du glissement et le gain de chacune.
+
+   Un coup devient alors 4 consultations de table au lieu de boucles
+   et d'allocations. C'est l'optimisation classique du 2048, et elle
+   ne change strictement rien au comportement du bot — seulement sa
+   vitesse, donc la profondeur qu'il peut se permettre.
+   ══════════════════════════════════════════════════════════ */
+let TAB_GAUCHE = null, TAB_DROITE = null, TAB_GAIN_G = null, TAB_GAIN_D = null;
+
+function miroirLigne(r) {
+  return ((r & 15) << 12) | (((r >> 4) & 15) << 8) | (((r >> 8) & 15) << 4) | ((r >> 12) & 15);
+}
+
+function construireTables() {
+  if (TAB_GAUCHE) return;
+  TAB_GAUCHE = new Uint16Array(65536);
+  TAB_DROITE = new Uint16Array(65536);
+  TAB_GAIN_G = new Int32Array(65536);
+  TAB_GAIN_D = new Int32Array(65536);
+
+  for (let r = 0; r < 65536; r++) {
+    const cases = [(r >> 12) & 15, (r >> 8) & 15, (r >> 4) & 15, r & 15];
+    const valeurs = cases.filter(v => v !== 0);
+    const sortie = [];
+    let gain = 0;
+
+    for (let i = 0; i < valeurs.length; i++) {
+      if (i + 1 < valeurs.length && valeurs[i] === valeurs[i + 1] && valeurs[i] < 15) {
+        const nouvelle = valeurs[i] + 1;
+        sortie.push(nouvelle);
+        gain += 1 << nouvelle;   // 2^nouvelle, la valeur reelle de la tuile creee
+        i++;                     // tuile consommee : pas de double fusion
+      } else {
+        sortie.push(valeurs[i]);
+      }
+    }
+    while (sortie.length < 4) sortie.push(0);
+
+    TAB_GAUCHE[r] = (sortie[0] << 12) | (sortie[1] << 8) | (sortie[2] << 4) | sortie[3];
+    TAB_GAIN_G[r] = gain;
+  }
+
+  // vers la droite : c'est le miroir du glissement vers la gauche
+  for (let r = 0; r < 65536; r++) {
+    const m = miroirLigne(r);
+    TAB_DROITE[r] = miroirLigne(TAB_GAUCHE[m]);
+    TAB_GAIN_D[r] = TAB_GAIN_G[m];
+  }
+}
+
+function transposer(p) {
+  const q = [0, 0, 0, 0];
+  for (let l = 0; l < 4; l++)
+    for (let c = 0; c < 4; c++) {
+      const v = (p[l] >> ((3 - c) * 4)) & 15;
+      if (v) q[c] |= v << ((3 - l) * 4);
+    }
+  return q;
+}
+
+function glisserPlateau(p, direction) {
+  let gain = 0, aBouge = false, q;
+
+  if (direction === "gauche" || direction === "droite") {
+    const T = direction === "gauche" ? TAB_GAUCHE : TAB_DROITE;
+    const G = direction === "gauche" ? TAB_GAIN_G : TAB_GAIN_D;
+    q = [0, 0, 0, 0];
+    for (let l = 0; l < 4; l++) {
+      q[l] = T[p[l]];
+      gain += G[p[l]];
+      if (q[l] !== p[l]) aBouge = true;
+    }
+  } else {
+    const t = transposer(p);
+    const T = direction === "haut" ? TAB_GAUCHE : TAB_DROITE;
+    const G = direction === "haut" ? TAB_GAIN_G : TAB_GAIN_D;
+    const inter = [0, 0, 0, 0];
+    for (let l = 0; l < 4; l++) {
+      inter[l] = T[t[l]];
+      gain += G[t[l]];
+      if (inter[l] !== t[l]) aBouge = true;
+    }
+    q = transposer(inter);
+  }
+  return { plateau: q, gain, aBouge };
+}
+
+function grilleVersPlateau(g) {
+  const p = [0, 0, 0, 0];
+  for (let l = 0; l < 4; l++) {
+    let r = 0;
+    for (let c = 0; c < 4; c++) {
+      const v = g[l][c];
+      if (v) r |= Math.round(Math.log2(v)) << ((3 - c) * 4);
+    }
+    p[l] = r;
+  }
+  return p;
+}
+
+function plateauVersGrille(p) {
+  const g = [];
+  for (let l = 0; l < 4; l++) {
+    const ligne = [];
+    for (let c = 0; c < 4; c++) {
+      const e = (p[l] >> ((3 - c) * 4)) & 15;
+      ligne.push(e ? (1 << e) : 0);
+    }
+    g.push(ligne);
+  }
+  return g;
+}
+
+function videsPlateau(p) {
+  let n = 0;
+  for (let l = 0; l < 4; l++)
+    for (let c = 0; c < 4; c++)
+      if (((p[l] >> ((3 - c) * 4)) & 15) === 0) n++;
+  return n;
+}
+
+/* ══════════════════════════════════════════════════════════
+   Evaluation
+   ══════════════════════════════════════════════════════════
+   Deux modes, comparables sur le banc d'essai :
+     - Criteres : cinq heuristiques classiques ponderees
+     - Gradient : une matrice en serpent qui encode d'un seul coup le
+                  coin ancre, l'ordre decroissant et la bordure
+
+   Les deux travaillent sur les exposants (1 pour la tuile 2, 11 pour
+   2048), jamais sur les valeurs brutes : l'ecart 512 -> 1024 doit
+   compter autant que 2 -> 4.
+   ══════════════════════════════════════════════════════════ */
+
+/* Matrice en serpent : la case la plus forte est en bas a gauche, et
+   les rangs suivent le trajet de lecture en zigzag. */
+const matricesSerpent = {};
+
+function matriceSerpent(n) {
+  if (matricesSerpent[n]) return matricesSerpent[n];
+  const m = Array.from({ length: n }, () => new Array(n).fill(0));
+  let rang = n * n - 1;
+  for (let i = 0; i < n; i++) {
+    const l = n - 1 - i;
+    const colonnes = [];
+    for (let c = 0; c < n; c++) colonnes.push(c);
+    if (i % 2 === 1) colonnes.reverse();
+    for (const c of colonnes) m[l][c] = rang--;
+  }
+  /* Poids geometrique. La raison compte enormement : trop douce, le bot
+     ne s'engage pas dans un coin et le lache des qu'un gain immediat se
+     presente. Mesure a l'appui — avec une raison de 1.45, le maximum ne
+     restait dans un coin que 43 % du temps, contre 96 % attendu. */
+  const maxRang = n * n - 1;
+  for (let l = 0; l < n; l++)
+    for (let c = 0; c < n; c++)
+      m[l][c] = Math.pow(2, m[l][c]) / Math.pow(2, maxRang);
+
+  matricesSerpent[n] = m;
+  return m;
+}
+
+/* Tampon partage : l'evaluation est une operation feuille, elle ne
+   s'appelle jamais elle-meme, donc un tampon unique est sans risque. */
+const EXPOSANTS = new Int8Array(36);
+
+function evaluerExposants(n) {
+  const e = EXPOSANTS;
+  let vides = 0, maxE = 0, ligneMax = 0, colonneMax = 0;
+
+  for (let l = 0; l < n; l++)
+    for (let c = 0; c < n; c++) {
+      const v = e[l * n + c];
+      if (v === 0) vides++;
+      else if (v > maxE) { maxE = v; ligneMax = l; colonneMax = c; }
+    }
+
+  let note = POIDS.casesVides * vides * 2;
+
+  // lissage : commun aux deux modes
+  let rugosite = 0;
+  for (let l = 0; l < n; l++)
+    for (let c = 0; c < n; c++) {
+      const v = e[l * n + c];
+      if (v === 0) continue;
+      if (c + 1 < n && e[l * n + c + 1]) rugosite += Math.abs(v - e[l * n + c + 1]);
+      if (l + 1 < n && e[(l + 1) * n + c]) rugosite += Math.abs(v - e[(l + 1) * n + c]);
+    }
+  note -= POIDS.lissage * rugosite;
+
+  if (modeEvaluation === "gradient") {
+    /* On pondere la VALEUR de la tuile, pas son exposant. C'est ce qui
+       donne au serpent sa force : une tuile 2048 hors de son coin coute
+       alors reellement cher, alors qu'en exposants (max 11) l'ecart
+       restait derisoire face aux autres criteres. */
+    const m = matriceSerpent(n);
+    let somme = 0;
+    for (let l = 0; l < n; l++) {
+      const base = l * n;
+      for (let c = 0; c < n; c++) {
+        const exposant = e[base + c];
+        if (exposant) somme += (1 << exposant) * m[l][c];
+      }
+    }
+    note += POIDS.gradient * somme / 48;
+    return note;
+  }
+
+  // mode criteres
+  let montH = 0, descH = 0, montV = 0, descV = 0;
+  for (let l = 0; l < n; l++)
+    for (let c = 0; c < n - 1; c++) {
+      const a = e[l * n + c], b = e[l * n + c + 1];
+      if (a > b) descH += a - b; else montH += b - a;
+    }
+  for (let c = 0; c < n; c++)
+    for (let l = 0; l < n - 1; l++) {
+      const a = e[l * n + c], b = e[(l + 1) * n + c];
+      if (a > b) descV += a - b; else montV += b - a;
+    }
+  note -= POIDS.monotonie * (Math.min(montH, descH) + Math.min(montV, descV));
+
+  const dansUnCoin = (ligneMax === 0 || ligneMax === n - 1)
+                  && (colonneMax === 0 || colonneMax === n - 1);
+  note += dansUnCoin ? POIDS.coin * maxE * 2 : -POIDS.coin * maxE;
+
+  const surUnBord = ligneMax === 0 || ligneMax === n - 1
+                 || colonneMax === 0 || colonneMax === n - 1;
+  if (surUnBord) note += POIDS.bordure * maxE;
+
+  return note;
+}
+
+function evaluerPlateau(p) {
+  for (let l = 0; l < 4; l++)
+    for (let c = 0; c < 4; c++)
+      EXPOSANTS[l * 4 + c] = (p[l] >> ((3 - c) * 4)) & 15;
+  return evaluerExposants(4);
+}
+
+function evaluer(g) {
+  const n = g.length;
+  for (let l = 0; l < n; l++)
+    for (let c = 0; c < n; c++)
+      EXPOSANTS[l * n + c] = g[l][c] ? Math.round(Math.log2(g[l][c])) : 0;
+  return evaluerExposants(n);
+}
+
+/* ══════════════════════════════════════════════════════════
+   Recherche expectimax
+   ══════════════════════════════════════════════════════════ */
+
+/* Table de transposition : une meme position revient souvent par des
+   chemins differents. Cle sur 2 x 32 bits, via deux Map imbriquees —
+   un entier JavaScript ne peut pas porter les 64 bits d'un plateau. */
+let transpositions = new Map();
+
+function lireTransposition(p, profondeur) {
+  const inter = transpositions.get(p[0] * 65536 + p[1]);
+  if (!inter) return undefined;
+  const e = inter.get(p[2] * 65536 + p[3]);
+  return (e && e.prof >= profondeur) ? e.val : undefined;
+}
+
+function ecrireTransposition(p, profondeur, val) {
+  const cleA = p[0] * 65536 + p[1];
+  let inter = transpositions.get(cleA);
+  if (!inter) { inter = new Map(); transpositions.set(cleA, inter); }
+  inter.set(p[2] * 65536 + p[3], { prof: profondeur, val });
+}
+
+/*
+  `proba` est la probabilite d'atteindre ce nœud depuis la racine.
+  Sous SEUIL_PROBA on arrete de descendre : inutile de raffiner une
+  branche qui n'arrivera presque jamais.
+*/
+function expectimaxPlateau(p, profondeur, estAuJoueur, proba) {
+  noeudsExplores++;
+  if (profondeur <= 0 || proba < SEUIL_PROBA) return evaluerPlateau(p);
+
+  if (estAuJoueur) {
+    const memo = lireTransposition(p, profondeur);
+    if (memo !== undefined) return memo;
+
+    let meilleure = -Infinity;
+    for (const dir of DIRECTIONS) {
+      const r = glisserPlateau(p, dir);
+      if (!r.aBouge) continue;
+      const v = expectimaxPlateau(r.plateau, profondeur - 1, false, proba);
+      if (v > meilleure) meilleure = v;
+    }
+    const val = meilleure === -Infinity ? evaluerPlateau(p) - 100000 : meilleure;
+    ecrireTransposition(p, profondeur, val);
+    return val;
+  }
+
+  const vides = videsPlateau(p);
+  if (vides === 0) return evaluerPlateau(p);
+
+  const partage = proba / vides;
+  let total = 0;
+
+  for (let l = 0; l < 4; l++)
+    for (let c = 0; c < 4; c++) {
+      const decalage = (3 - c) * 4;
+      if (((p[l] >> decalage) & 15) !== 0) continue;
+
+      const original = p[l];
+      p[l] = original | (1 << decalage);          // tuile 2
+      total += 0.9 * expectimaxPlateau(p, profondeur - 1, true, partage * 0.9);
+      p[l] = original | (2 << decalage);          // tuile 4
+      total += 0.1 * expectimaxPlateau(p, profondeur - 1, true, partage * 0.1);
+      p[l] = original;                            // on remet la case en etat
+    }
+
+  return total / vides;
+}
+
+/* Chemin generique, pour les grilles autres que 4x4 : plus lent, mais
+   les tables de 16^n entrees seraient impossibles a construire. */
+function casesLibresGrille(g) {
+  const libres = [];
+  for (let l = 0; l < g.length; l++)
+    for (let c = 0; c < g.length; c++)
+      if (g[l][c] === 0) libres.push([l, c]);
+  return libres;
+}
+
+function expectimaxGrille(g, profondeur, estAuJoueur, proba) {
+  noeudsExplores++;
+  if (profondeur <= 0 || proba < SEUIL_PROBA) return evaluer(g);
+
+  if (estAuJoueur) {
+    let meilleure = -Infinity;
+    for (const dir of DIRECTIONS) {
+      const r = glisser(g, dir);
+      if (!r.aBouge) continue;
+      const v = expectimaxGrille(r.grille, profondeur - 1, false, proba);
+      if (v > meilleure) meilleure = v;
+    }
+    return meilleure === -Infinity ? evaluer(g) - 100000 : meilleure;
+  }
+
+  const libres = casesLibresGrille(g);
+  if (libres.length === 0) return evaluer(g);
+  const partage = proba / libres.length;
+  let total = 0;
+
+  for (const [l, c] of libres) {
+    g[l][c] = 2;
+    total += 0.9 * expectimaxGrille(g, profondeur - 1, true, partage * 0.9);
+    g[l][c] = 4;
+    total += 0.1 * expectimaxGrille(g, profondeur - 1, true, partage * 0.1);
+    g[l][c] = 0;
+  }
+  return total / libres.length;
+}
+
+/*
+  Profondeur automatique : elle depend du nombre de cases libres (moins
+  il y en a, moins l'arbre est large) et de la taille de la grille.
+  La coupure par probabilite limitant deja le travail inutile, on peut
+  se permettre nettement plus qu'avant sur les grilles 4x4.
+*/
+function profondeurAuto(g) {
+  const n = g.length;
+  const vides = casesLibresGrille(g).length;
+  if (n !== 4) return n === 5 ? (vides <= 6 ? 3 : 2) : 2;
+  return vides <= 2 ? 8 : vides <= 4 ? 7 : vides <= 6 ? 6 : vides <= 9 ? 5 : 4;
+}
+
+function profondeurAutoPlateau(p) {
+  const vides = videsPlateau(p);
+  return vides <= 2 ? 8 : vides <= 4 ? 7 : vides <= 6 ? 6 : vides <= 9 ? 5 : 4;
+}
+
+/* Choisit la meilleure direction pour une grille de nombres */
+function meilleurCoup(g) {
+  if (g.length === 4) {
+    construireTables();
+    return meilleurCoupPlateau(grilleVersPlateau(g));
+  }
+
+  const profondeur = profondeurChoisie > 0 ? profondeurChoisie : profondeurAuto(g);
+  let meilleure = null, meilleureNote = -Infinity;
+  for (const dir of DIRECTIONS) {
+    const r = glisser(g, dir);
+    if (!r.aBouge) continue;
+    const note = expectimaxGrille(r.grille, profondeur - 1, false, 1);
+    if (note > meilleureNote) { meilleureNote = note; meilleure = dir; }
+  }
+  return { direction: meilleure, note: meilleureNote, profondeur };
+}
+
+function meilleurCoupPlateau(p) {
+  const profondeur = profondeurChoisie > 0 ? profondeurChoisie : profondeurAutoPlateau(p);
+  transpositions = new Map();   // les positions d'un coup a l'autre different
+
+  let meilleure = null, meilleureNote = -Infinity;
+  for (const dir of DIRECTIONS) {
+    const r = glisserPlateau(p, dir);
+    if (!r.aBouge) continue;
+    const note = expectimaxPlateau(r.plateau, profondeur - 1, false, 1);
+    if (note > meilleureNote) { meilleureNote = note; meilleure = dir; }
+  }
+  return { direction: meilleure, note: meilleureNote, profondeur };
+}
+
+/* ─── Boucle de jeu du bot ──────────────────────────────── */
+const NOMS_DIRECTION = { gauche: "←", droite: "→", haut: "↑", bas: "↓" };
+
+function coupDuBot() {
+  const debut = performance.now();
+  noeudsExplores = 0;
+  const choix = meilleurCoup(versGrille());
+  const duree = performance.now() - debut;
+
+  if (!choix.direction) {
+    majInfoBot("Aucun coup possible.", choix, duree);
+    return false;
+  }
+
+  marquerCoupDuBot();   // la partie bascule en categorie « avec bot »
+  majInfoBot(null, choix, duree);
+  jouerCoup(choix.direction);
+  return true;
+}
+
+function majInfoBot(message, choix, duree) {
+  const el = document.getElementById("info-bot");
+  if (!el) return;
+  if (message) { el.textContent = message; return; }
+  el.innerHTML =
+    "coup choisi     " + NOMS_DIRECTION[choix.direction] + "  " + choix.direction + "\n" +
+    "profondeur      " + choix.profondeur +
+      (profondeurChoisie === 0 ? " (auto)" : " (fixee)") + "\n" +
+    "positions       " + noeudsExplores.toLocaleString("fr-FR") + "\n" +
+    "temps de calcul " + duree.toFixed(1) + " ms\n" +
+    "evaluation      " + choix.note.toFixed(1);
+  el.style.whiteSpace = "pre";
+}
+
+function boucleBot() {
+  if (!botActif) return;
+
+  if (partieTerminee) { arreterBot("Partie terminee."); return; }
+
+  // on attend la fin de l'animation en cours plutot que de la bousculer
+  if (animationEnCours) { minuteurBot = setTimeout(boucleBot, 20); return; }
+
+  if (!coupDuBot()) { arreterBot("Aucun coup possible."); return; }
+
+  minuteurBot = setTimeout(boucleBot, vitesseBot);
+}
+
+function demarrerBot() {
+  if (botActif || partieTerminee) return;
+  botActif = true;
+  elPlateau.classList.add("pilote-par-bot");
+  majBoutonBot();
+  annoncer("Bot demarre.");
+  boucleBot();
+}
+
+function arreterBot(raison) {
+  botActif = false;
+  clearTimeout(minuteurBot);
+  elPlateau.classList.remove("pilote-par-bot");
+  majBoutonBot();
+  if (raison) {
+    const el = document.getElementById("info-bot");
+    if (el) el.textContent = raison;
+  }
+  annoncer("Bot arrete.");
+}
+
+function basculerBot() { botActif ? arreterBot(null) : demarrerBot(); }
+
+function majBoutonBot() {
+  const b = document.getElementById("btn-bascule-bot");
+  if (!b) return;
+  b.textContent = "Bot : " + (botActif ? "en marche" : "arrete");
+  b.classList.toggle("actif", botActif);
+  b.setAttribute("aria-pressed", botActif ? "true" : "false");
+}
+
+/* ══════════════════════════════════════════════════════════
+   BANC D'ESSAI A GRAINES FIXES
+   ══════════════════════════════════════════════════════════
+   Le score d'une partie de 2048 est extremement bruyant : sur nos
+   premieres mesures, des reglages identiques donnaient des scores
+   allant de 7 000 a 40 000. Comparer deux configurations sur des
+   parties differentes ne prouve donc rien.
+
+   La parade : un generateur pseudo-aleatoire a graine. Chaque
+   configuration rejoue exactement les memes sequences de tuiles.
+   On ne compare plus deux echantillons du hasard, mais deux joueurs
+   sur les memes parties — et l'essentiel du bruit disparait.
+   ══════════════════════════════════════════════════════════ */
+
+/* xorshift32 : court, rapide, largement suffisant ici */
+function creerAlea(graine) {
+  let s = (graine >>> 0) || 1;
+  return function () {
+    s ^= s << 13; s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;  s >>>= 0;
+    return s / 4294967296;
+  };
+}
+
+const GRAINES = [];
+for (let i = 0; i < 100; i++) GRAINES.push(Math.imul(0x9E3779B9, i + 1) >>> 0);
+
+function ajouterTuilePlateau(p, alea) {
+  const vides = [];
+  for (let l = 0; l < 4; l++)
+    for (let c = 0; c < 4; c++)
+      if (((p[l] >> ((3 - c) * 4)) & 15) === 0) vides.push([l, c]);
+  if (vides.length === 0) return false;
+  const [l, c] = vides[Math.floor(alea() * vides.length)];
+  const exposant = alea() < CONFIG.probabiliteQuatre ? 2 : 1;
+  p[l] |= exposant << ((3 - c) * 4);
+  return true;
+}
+
+function maxPlateau(p) {
+  let m = 0;
+  for (let l = 0; l < 4; l++)
+    for (let c = 0; c < 4; c++) {
+      const e = (p[l] >> ((3 - c) * 4)) & 15;
+      if (e > m) m = e;
+    }
+  return m ? (1 << m) : 0;
+}
+
+/* Le maximum est-il dans un coin ? C'est le diagnostic le plus parlant :
+   un bot solide y reste au-dessus de 95 % du temps. */
+function maxDansUnCoin(p) {
+  let m = 0, ligne = 0, colonne = 0;
+  for (let l = 0; l < 4; l++)
+    for (let c = 0; c < 4; c++) {
+      const e = (p[l] >> ((3 - c) * 4)) & 15;
+      if (e > m) { m = e; ligne = l; colonne = c; }
+    }
+  return (ligne === 0 || ligne === 3) && (colonne === 0 || colonne === 3);
+}
+
+/* Une partie complete en 4x4, sans aucun contact avec l'affichage */
+function simulerPartie(graine) {
+  construireTables();
+  const alea = creerAlea(graine);
+  const p = [0, 0, 0, 0];
+  ajouterTuilePlateau(p, alea);
+  ajouterTuilePlateau(p, alea);
+
+  let score = 0, coups = 0, dansCoin = 0;
+  while (true) {
+    const choix = meilleurCoupPlateau(p);
+    if (!choix.direction) break;
+    const r = glisserPlateau(p, choix.direction);
+    p[0] = r.plateau[0]; p[1] = r.plateau[1];
+    p[2] = r.plateau[2]; p[3] = r.plateau[3];
+    score += r.gain;
+    coups++;
+    if (maxDansUnCoin(p)) dansCoin++;
+    ajouterTuilePlateau(p, alea);
+    if (coups > 20000) break;
+  }
+  return { score, max: maxPlateau(p), coups, retention: coups ? dansCoin / coups : 0 };
+}
+
+function statistiques(res) {
+  const n = res.length;
+  const sc = res.map(r => r.score).sort((a, b) => a - b);
+  const mediane = n % 2
+    ? sc[(n - 1) / 2]
+    : Math.round((sc[n / 2 - 1] + sc[n / 2]) / 2);
+  const atteint = (v) => res.filter(r => r.max >= v).length / n;
+  return {
+    n, mediane,
+    moyenne: Math.round(sc.reduce((a, b) => a + b, 0) / n),
+    min: sc[0], max: sc[n - 1],
+    t1024: atteint(1024), t2048: atteint(2048), t4096: atteint(4096),
+    coups: Math.round(res.reduce((a, r) => a + r.coups, 0) / n),
+    retention: res.reduce((a, r) => a + r.retention, 0) / n
+  };
+}
+
+function formaterStats(s, titre) {
+  const pc = (x) => (x * 100).toFixed(0) + "%";
+  return titre + " (" + s.n + " parties)\n" +
+    "  score median   " + s.mediane.toLocaleString("fr-FR") + "\n" +
+    "  score moyen    " + s.moyenne.toLocaleString("fr-FR") + "\n" +
+    "  min / max      " + s.min.toLocaleString("fr-FR") + " / " + s.max.toLocaleString("fr-FR") + "\n" +
+    "  atteint 1024   " + pc(s.t1024) + "\n" +
+    "  atteint 2048   " + pc(s.t2048) + "\n" +
+    "  atteint 4096   " + pc(s.t4096) + "\n" +
+    "  coups moyens   " + s.coups + "\n" +
+    "  max dans coin  " + pc(s.retention);
+}
+
+/* ─── Configurations : capture et restauration ──────────── */
+function configActuelle() {
+  return { POIDS: { ...POIDS }, modeEvaluation, profondeurChoisie };
+}
+
+function appliquerConfig(cfg) {
+  POIDS = { ...cfg.POIDS };
+  modeEvaluation = cfg.modeEvaluation;
+  profondeurChoisie = cfg.profondeurChoisie;
+}
+
+function champion() {
+  try {
+    const d = JSON.parse(lire("2048-bot-champion"));
+    if (d && d.POIDS) return d;
+  } catch (e) {}
+  return null;
+}
+
+/*
+  Execute une serie de parties par tranches, en rendant la main au
+  navigateur entre chaque : l'interface reste utilisable et le bouton
+  Arreter repond immediatement.
+*/
+function serieDeParties(nb, cfg, surProgression, surFin) {
+  const resultats = [];
+  const sauvegarde = configActuelle();
+  let i = 0;
+
+  const tranche = () => {
+    if (!bancEnCours) { appliquerConfig(sauvegarde); surFin(resultats, true); return; }
+
+    const limite = performance.now() + 60;
+    while (i < nb && performance.now() < limite) {
+      appliquerConfig(cfg);
+      resultats.push(simulerPartie(GRAINES[i % GRAINES.length]));
+      i++;
+    }
+    appliquerConfig(sauvegarde);
+
+    if (i >= nb) { surFin(resultats, false); return; }
+    surProgression(i, nb);
+    setTimeout(tranche, 0);
+  };
+  setTimeout(tranche, 0);
+}
+
+function demarrerBanc() {
+  bancEnCours = true;
+  document.getElementById("btn-banc").disabled = true;
+  document.getElementById("btn-comparer").disabled = true;
+  document.getElementById("btn-arreter-banc").disabled = false;
+  document.getElementById("resultat-banc").classList.remove("cache");
+}
+
+function terminerBanc() {
+  bancEnCours = false;
+  document.getElementById("btn-banc").disabled = false;
+  document.getElementById("btn-comparer").disabled = false;
+  document.getElementById("btn-arreter-banc").disabled = true;
+}
+
+function ecrireBanc(texte) {
+  const z = document.getElementById("resultat-banc");
+  z.textContent = texte;
+  z.style.whiteSpace = "pre";
+}
+
+function lancerBanc(nb) {
+  if (bancEnCours || optimEnCours) return;
+  demarrerBanc();
+  const debut = performance.now();
+  ecrireBanc("Mesure en cours...");
+
+  serieDeParties(nb, configActuelle(),
+    (fait, total) => ecrireBanc("Mesure : " + fait + " / " + total + " parties"),
+    (res, interrompu) => {
+      if (res.length === 0) { ecrireBanc("Arrete avant la premiere partie."); terminerBanc(); return; }
+      ecrireBanc(formaterStats(statistiques(res),
+        (interrompu ? "Arrete — " : "") + "Reglage actuel") +
+        "\n  duree         " + ((performance.now() - debut) / 1000).toFixed(1) + " s");
+      terminerBanc();
+    });
+}
+
+/*
+  Comparaison appariee : les deux configurations affrontent les memes
+  graines. On compte les parties gagnees l'une contre l'autre, ce qui
+  est bien plus fiable qu'une difference de moyennes.
+*/
+function lancerComparaison(nb) {
+  if (bancEnCours || optimEnCours) return;
+  const champ = champion();
+  if (!champ) {
+    document.getElementById("resultat-banc").classList.remove("cache");
+    ecrireBanc("Aucun champion enregistre.\nUtilisez « Sacrer champion » pour figer le reglage actuel comme reference.");
+    return;
+  }
+  demarrerBanc();
+  ecrireBanc("Comparaison en cours...");
+
+  serieDeParties(nb, configActuelle(),
+    (f, t) => ecrireBanc("Reglage actuel : " + f + " / " + t),
+    (resActuel, interrompu1) => {
+      if (interrompu1) { ecrireBanc("Comparaison interrompue."); terminerBanc(); return; }
+
+      serieDeParties(nb, champ,
+        (f, t) => ecrireBanc("Champion : " + f + " / " + t),
+        (resChamp, interrompu2) => {
+          if (interrompu2) { ecrireBanc("Comparaison interrompue."); terminerBanc(); return; }
+
+          const sA = statistiques(resActuel), sC = statistiques(resChamp);
+          let gagnees = 0, perdues = 0;
+          for (let i = 0; i < resActuel.length; i++) {
+            if (resActuel[i].score > resChamp[i].score) gagnees++;
+            else if (resActuel[i].score < resChamp[i].score) perdues++;
+          }
+          const ecart = sA.mediane - sC.mediane;
+          const verdict = gagnees > perdues && ecart > 0
+            ? "Le reglage actuel semble MEILLEUR."
+            : gagnees < perdues && ecart < 0
+              ? "Le champion reste MEILLEUR."
+              : "Match nul : rien ne permet de trancher.";
+
+          ecrireBanc(
+            formaterStats(sA, "Reglage actuel") + "\n\n" +
+            formaterStats(sC, "Champion") + "\n\n" +
+            "Sur les memes graines :\n" +
+            "  parties gagnees " + gagnees + " / perdues " + perdues +
+            " / nulles " + (resActuel.length - gagnees - perdues) + "\n" +
+            "  ecart de mediane " + (ecart >= 0 ? "+" : "") + ecart.toLocaleString("fr-FR") + "\n\n" +
+            verdict);
+          terminerBanc();
+        });
+    });
+}
+
+/* ══════════════════════════════════════════════════════════
+   REGLAGE AUTOMATIQUE — descente de coordonnees
+   ══════════════════════════════════════════════════════════
+   Pour chaque poids, on essaie une valeur plus basse et une plus
+   haute, sur les memes graines. On garde la meilleure, puis on passe
+   au poids suivant. Quelques passes suffisent a s'approcher d'un bon
+   reglage, sans aucune intuition.
+   ══════════════════════════════════════════════════════════ */
+function lancerOptimisation() {
+  if (bancEnCours || optimEnCours) return;
+  optimEnCours = true;
+  bancEnCours = true;              // reutilise le meme drapeau d'arret
+  document.getElementById("btn-optimiser").disabled = true;
+  document.getElementById("btn-arreter-optim").disabled = false;
+  const zone = document.getElementById("resultat-optim");
+  zone.classList.remove("cache");
+  zone.style.whiteSpace = "pre";
+
+  const GRAINES_OPTIM = 10;        // peu de parties : on cherche une tendance
+  const PASSES = 3;
+  const cles = POIDS_UTILISES[modeEvaluation];
+  const journal = [];
+  let meilleureConfig = configActuelle();
+  let meilleureNote = null;
+  let passe = 0, indexCle = 0, essais = [], indexEssai = 0;
+
+  const afficher = (ligne) => {
+    zone.textContent =
+      "Optimisation — mode " + modeEvaluation + ", " + GRAINES_OPTIM + " parties par essai\n" +
+      (ligne ? ligne + "\n" : "") + "\n" + journal.slice(-24).join("\n");
+  };
+
+  const evaluerConfig = (cfg, etiquette, suite) => {
+    serieDeParties(GRAINES_OPTIM, cfg,
+      () => {}, (res, interrompu) => {
+        if (interrompu) { finir(true); return; }
+        const s = statistiques(res);
+        suite(s.mediane, s);
+      });
+  };
+
+  const finir = (interrompu) => {
+    appliquerConfig(meilleureConfig);
+    POIDS = { ...meilleureConfig.POIDS };
+    sauvegarderBot();
+    construirePanneauBot();
+    journal.push(interrompu ? "— interrompu —" : "— termine —");
+    journal.push("poids retenus : " + cles.map(k => k + "=" + POIDS[k].toFixed(2)).join("  "));
+    afficher("");
+    optimEnCours = false;
+    bancEnCours = false;
+    document.getElementById("btn-optimiser").disabled = false;
+    document.getElementById("btn-arreter-optim").disabled = true;
+  };
+
+  const suivant = () => {
+    if (!bancEnCours) { finir(true); return; }
+
+    if (indexEssai >= essais.length) {
+      indexCle++;
+      if (indexCle >= cles.length) { indexCle = 0; passe++; }
+      if (passe >= PASSES) { finir(false); return; }
+
+      const cle = cles[indexCle];
+      const base = meilleureConfig.POIDS[cle];
+
+      /* Une recherche purement multiplicative ne peut jamais faire
+         remonter un poids tombe a zero. On bascule donc sur des valeurs
+         absolues quand la base est quasi nulle. */
+      const candidats = base < 0.05
+        ? [BORNES_POIDS[cle] * 0.1, BORNES_POIDS[cle] * 0.35]
+        : [base * 0.7, base * 1.4];
+
+      essais = candidats.map(v => {
+        const cfg = { ...meilleureConfig, POIDS: { ...meilleureConfig.POIDS } };
+        cfg.POIDS[cle] = Math.min(BORNES_POIDS[cle], Math.max(0, +v.toFixed(3)));
+        return { cle, valeur: cfg.POIDS[cle], cfg };
+      }).filter(e => Math.abs(e.valeur - base) > 0.01);
+      indexEssai = 0;
+      if (essais.length === 0) { suivant(); return; }
+    }
+
+    const essai = essais[indexEssai++];
+    afficher("passe " + (passe + 1) + "/" + PASSES + " — essai " +
+             essai.cle + " = " + essai.valeur.toFixed(2));
+
+    evaluerConfig(essai.cfg, essai.cle, (note) => {
+      if (meilleureNote === null || note > meilleureNote) {
+        meilleureNote = note;
+        meilleureConfig = essai.cfg;
+        journal.push("+ " + essai.cle + " = " + essai.valeur.toFixed(2) +
+                     "  mediane " + note.toLocaleString("fr-FR") + "  (retenu)");
+      } else {
+        journal.push("  " + essai.cle + " = " + essai.valeur.toFixed(2) +
+                     "  mediane " + note.toLocaleString("fr-FR"));
+      }
+      suivant();
+    });
+  };
+
+  // point de depart : le reglage courant
+  afficher("mesure du point de depart...");
+  evaluerConfig(meilleureConfig, "depart", (note) => {
+    meilleureNote = note;
+    journal.push("depart : mediane " + note.toLocaleString("fr-FR"));
+    indexCle = -1; indexEssai = 0; essais = [];
+    suivant();
+  });
+}
+
+/* ─── Panneau Bot ───────────────────────────────────────── */
+const LIBELLES_POIDS = {
+  casesVides: "Cases libres", monotonie: "Monotonie", lissage: "Lissage",
+  coin: "Coin", bordure: "Bordure", gradient: "Serpent"
+};
+
+function construirePanneauBot() {
+  majBoutonBot();
+
+  rangeeChoix("liste-profondeurs",
+    [{ libelle: "Auto", valeur: 0 }].concat(
+      [2, 3, 4, 5, 6, 7, 8].map(p => ({ libelle: String(p), valeur: p }))),
+    profondeurChoisie,
+    (p) => { profondeurChoisie = p; sauvegarderBot(); });
+
+  rangeeChoix("liste-evaluations",
+    [{ libelle: "Gradient", valeur: "gradient" }, { libelle: "Criteres", valeur: "criteres" }],
+    modeEvaluation,
+    (m) => { modeEvaluation = m; sauvegarderBot(); construirePanneauBot(); });
+
+  document.getElementById("note-evaluation").innerHTML = modeEvaluation === "gradient"
+    ? "Une matrice en serpent : la case la plus forte est en bas a gauche, " +
+      "et les valeurs decroissent en zigzag. Encode d'un seul coup le coin ancre, " +
+      "l'ordre decroissant et la bordure."
+    : "Cinq heuristiques ponderees separement. Plus de leviers, mais elles se " +
+      "contredisent parfois — d'ou un reglage plus delicat.";
+
+  rangeeChoix("liste-nb-parties",
+    [10, 25, 50, 100].map(n => ({ libelle: n + " parties", valeur: n })),
+    nbPartiesBanc,
+    (n) => { nbPartiesBanc = n; sauvegarderBot(); });
+
+  const curseur = document.getElementById("curseur-vitesse-bot");
+  curseur.value = vitesseBot;
+  document.getElementById("valeur-vitesse-bot").textContent = vitesseBot + " ms";
+
+  // seuls les poids utiles au mode courant sont proposes
+  const zone = document.getElementById("curseurs-poids");
+  zone.innerHTML = "";
+  for (const cle of POIDS_UTILISES[modeEvaluation]) {
+    const ligne = document.createElement("div");
+    ligne.className = "ligne-poids";
+    const lab = document.createElement("label");
+    lab.textContent = LIBELLES_POIDS[cle];
+    lab.setAttribute("for", "poids-" + cle);
+    const input = document.createElement("input");
+    input.type = "range"; input.id = "poids-" + cle;
+    input.min = 0; input.max = BORNES_POIDS[cle]; input.step = 0.05;
+    input.value = POIDS[cle];
+    const sortie = document.createElement("output");
+    sortie.textContent = POIDS[cle].toFixed(2);
+    input.addEventListener("input", () => {
+      POIDS[cle] = parseFloat(input.value);
+      sortie.textContent = POIDS[cle].toFixed(2);
+      sauvegarderBot();
+    });
+    ligne.appendChild(lab); ligne.appendChild(input); ligne.appendChild(sortie);
+    zone.appendChild(ligne);
+  }
+
+  const champ = champion();
+  document.getElementById("btn-champion").textContent =
+    champ ? "Remplacer le champion" : "Sacrer champion";
+}
+
+function sauvegarderBot() {
+  ecrire("2048-bot", JSON.stringify({
+    POIDS, vitesseBot, profondeurChoisie, modeEvaluation, nbPartiesBanc
+  }));
+}
+
+function chargerBot() {
+  try {
+    const d = JSON.parse(lire("2048-bot"));
+    if (d) {
+      if (d.POIDS) for (const cle of Object.keys(POIDS_DEFAUT))
+        if (typeof d.POIDS[cle] === "number" && d.POIDS[cle] >= 0 && d.POIDS[cle] <= BORNES_POIDS[cle])
+          POIDS[cle] = d.POIDS[cle];
+      if (typeof d.vitesseBot === "number" && d.vitesseBot >= 0 && d.vitesseBot <= 500)
+        vitesseBot = d.vitesseBot;
+      if ([0, 2, 3, 4, 5, 6, 7, 8].includes(d.profondeurChoisie)) profondeurChoisie = d.profondeurChoisie;
+      if (d.modeEvaluation === "gradient" || d.modeEvaluation === "criteres")
+        modeEvaluation = d.modeEvaluation;
+      if ([10, 25, 50, 100].includes(d.nbPartiesBanc)) nbPartiesBanc = d.nbPartiesBanc;
+    }
+  } catch (e) { /* reglages par defaut */ }
+}
+
+document.getElementById("btn-bascule-bot").addEventListener("click", basculerBot);
+
+document.getElementById("btn-un-coup").addEventListener("click", () => {
+  if (!partieTerminee && !animationEnCours) coupDuBot();
+});
+
+document.getElementById("curseur-vitesse-bot").addEventListener("input", (e) => {
+  vitesseBot = parseInt(e.target.value, 10);
+  document.getElementById("valeur-vitesse-bot").textContent = vitesseBot + " ms";
+  sauvegarderBot();
+});
+
+document.getElementById("btn-banc").addEventListener("click", () => lancerBanc(nbPartiesBanc));
+document.getElementById("btn-comparer").addEventListener("click", () => lancerComparaison(nbPartiesBanc));
+document.getElementById("btn-arreter-banc").addEventListener("click", () => { bancEnCours = false; });
+
+document.getElementById("btn-champion").addEventListener("click", () => {
+  ecrire("2048-bot-champion", JSON.stringify(configActuelle()));
+  construirePanneauBot();
+  document.getElementById("resultat-banc").classList.remove("cache");
+  ecrireBanc("Reglage actuel enregistre comme champion.\n" +
+    "Modifiez maintenant un poids, puis utilisez « Comparer au champion ».");
+});
+
+document.getElementById("btn-optimiser").addEventListener("click", lancerOptimisation);
+document.getElementById("btn-arreter-optim").addEventListener("click", () => { bancEnCours = false; });
+
+document.getElementById("btn-reinitialiser-bot").addEventListener("click", () => {
+  POIDS = { ...POIDS_DEFAUT };
+  sauvegarderBot();
+  construirePanneauBot();
+});
+
+/* ══════════════════════════════════════════════════════════
+   13. REDIMENSIONNEMENT ET DEMARRAGE
+   ══════════════════════════════════════════════════════════ */
+btnNouvelle.addEventListener("click", () => { nouvellePartie(); elPlateau.focus(); });
+btnAnnuler.addEventListener("click", annuler);
+
+let minuteurRedim = null;
+window.addEventListener("resize", () => {
+  clearTimeout(minuteurRedim);
+  minuteurRedim = setTimeout(() => {
+    calculerDimensions();
+    dessinerFond();
+    repositionner();   // on replace, on ne recree pas
+  }, 80);
+});
+
+function nouvellePartie() {
+  tuiles = [];
+  score = 0; coups = 0;
+  historique = [];
+  prochainId = 1;
+  partieTerminee = false;
+  victoireAnnoncee = false;
+  animationEnCours = false;
+  objectifAtteintCettePartie = false;
+  botAJoue = false;              // nouvelle partie : on repart en categorie solo
+  masquerSurimpression();
+  record = parseInt(lire(CLES.record(taille, botAJoue)) || "0", 10);
+  ajouterTuile();
+  ajouterTuile();
+  dessiner();
+  majInterface();
+  sauvegarderPartie();
+  annoncer("Nouvelle partie, grille " + taille + " sur " + taille + ".");
+}
+
+function demarrer() {
+  chargerCouleurs();
+  chargerAnimations();
+  chargerReglagesJeu();
+  chargerParties();
+  chargerBot();
+
+  appliquerPalette();
+  appliquerAnimations();
+
+  const reprise = reprendrePartie();   // fixe `taille` si une partie existe
+  record = parseInt(lire(CLES.record(taille, botAJoue)) || "0", 10);
+
+  calculerDimensions();
+  dessinerFond();
+
+  if (reprise) {
+    dessiner();
+    majInterface();
+    annoncer("Partie reprise. Score " + score + ".");
+  } else {
+    nouvellePartie();
+  }
+}
+
+demarrer();
+
+// Le header Orbit est charge en `defer` : il prend sa hauteur apres ce script.
+// On recalcule les dimensions une fois qu'il est monte.
+customElements.whenDefined("orbit-header").then(() => {
+  requestAnimationFrame(() => { calculerDimensions(); dessinerFond(); dessiner(); });
+});
+
+/* ══════════════════════════════════════════════════════════
+   14. VERSION PURE (tests et futur bot)
+   ══════════════════════════════════════════════════════════
+   Simule un coup sur une grille de nombres, sans toucher a l'etat du
+   jeu et sans ajouter de nouvelle tuile. La taille est deduite de la
+   grille fournie.
+   ══════════════════════════════════════════════════════════ */
+function glisser(grille, direction) {
+  const n = grille.length;
+  const sortie = Array.from({ length: n }, () => new Array(n).fill(0));
+  let gain = 0, aBouge = false;
+
+  for (let i = 0; i < n; i++) {
+    const valeurs = [];
+    for (let j = 0; j < n; j++) {
+      const pos = coordonnees(direction, i, j, n);
+      const v = grille[pos.ligne][pos.colonne];
+      if (v !== 0) valeurs.push(v);
+    }
+
+    const compactee = [];
+    for (let k = 0; k < valeurs.length; k++) {
+      if (k + 1 < valeurs.length && valeurs[k] === valeurs[k + 1]) {
+        const fusion = valeurs[k] * 2;
+        compactee.push(fusion);
+        gain += fusion;
+        k++;   // tuile consommee : pas de double fusion
+      } else {
+        compactee.push(valeurs[k]);
+      }
+    }
+
+    for (let j = 0; j < n; j++) {
+      const pos = coordonnees(direction, i, j, n);
+      const v = compactee[j] || 0;
+      sortie[pos.ligne][pos.colonne] = v;
+      if (v !== grille[pos.ligne][pos.colonne]) aBouge = true;
+    }
+  }
+  return { grille: sortie, gain, aBouge };
+}
+
+window.jeu2048 = {
+  glisser, simulerAvecTuiles, versGrille, coupPossibleGrille, lancerTests,
+  DIRECTIONS, CONFIG, THEMES, GLISSEMENTS, APPARITIONS, FUSIONS,
+  // bot
+  evaluer, evaluerPlateau, meilleurCoup, meilleurCoupPlateau, profondeurAuto,
+  coupDuBot, demarrerBot, arreterBot, POIDS, POIDS_DEFAUT, POIDS_UTILISES,
+  construireTables, glisserPlateau, grilleVersPlateau, plateauVersGrille,
+  simulerPartie, statistiques, creerAlea, GRAINES, matriceSerpent,
+  reglages: () => ({ POIDS: { ...POIDS }, modeEvaluation, profondeurChoisie, nbPartiesBanc }),
+  fixerMode: (m) => { modeEvaluation = m; },
+  etat: () => ({ taille, mode, objectif, score, coups, tuiles: tuiles.length,
+                 botActif, botAJoue, profondeurChoisie, vitesseBot, modeEvaluation })
+};
+</script>
+</body>
+</html>
